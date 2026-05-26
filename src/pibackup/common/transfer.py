@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import shlex
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,6 +106,18 @@ def parse_rsync_stats(output: str) -> tuple[int, int]:
 
 def classify_exit(code: int) -> bool:
     return code in _OK_EXIT_CODES
+
+
+def background_prefix() -> list[str]:
+    """A ``nice``/``ionice`` prefix so backups stay out of the way of foreground
+    work (empty if the tools aren't available). Exit codes pass through both,
+    so this is transparent to :func:`run_rsync`."""
+    prefix: list[str] = []
+    if shutil.which("nice"):
+        prefix += ["nice", "-n", "19"]
+    if shutil.which("ionice"):
+        prefix += ["ionice", "-c", "3"]  # idle I/O class
+    return prefix
 
 
 def run_rsync(cmd: Sequence[str]) -> RsyncResult:

@@ -27,7 +27,12 @@ from typing import Optional
 
 from pibackup.common.config import Config, JobSpec
 from pibackup.common.crypto import ARCHIVE_SUFFIX
-from pibackup.common.transfer import Destination, build_rsync_command, run_rsync
+from pibackup.common.transfer import (
+    Destination,
+    background_prefix,
+    build_rsync_command,
+    run_rsync,
+)
 
 
 def _timestamp() -> str:
@@ -61,6 +66,12 @@ class BackupEngine:
         self.config = config
         self.dest = Destination(config.repo_target)
 
+    def _rsync(self, cmd: list[str]):
+        """Run rsync, wrapped in nice/ionice when background mode is on."""
+        if self.config.background:
+            cmd = background_prefix() + cmd
+        return run_rsync(cmd)
+
     def run_job(
         self, spec: JobSpec, *, dry_run: bool = False, recipient: Optional[str] = None
     ) -> JobResult:
@@ -88,7 +99,7 @@ class BackupEngine:
             relative=True, dry_run=dry_run,
         )
         started = _now_iso()
-        result = run_rsync(cmd)
+        result = self._rsync(cmd)
         finished = _now_iso()
 
         snapshot = snapshot_path = None
@@ -133,7 +144,7 @@ class BackupEngine:
                 str(local_archive), self.dest.rsync_target(snap_sub),
                 compress=False, bwlimit_kbps=spec.bwlimit_kbps or None,
             )
-            result = run_rsync(cmd)
+            result = self._rsync(cmd)
         finished = _now_iso()
 
         if not result.ok:

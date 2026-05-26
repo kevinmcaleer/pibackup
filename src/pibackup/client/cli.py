@@ -580,8 +580,14 @@ def enroll(
     store.ensure_client(name, None)
     token = store.create_enroll_token(name)
     advertised = url or cfg.server_url
+    install_url = "https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh"
     console.print(f"[green]Enrollment token for[/] [bold]{name}[/]: [cyan]{token}[/]")
-    console.print("Run this on the new Pi:")
+    console.print("\nOn a fresh Pi (installs, enrolls, schedules):")
+    console.print(
+        f"  [bold]curl -fsSL {install_url} | sh -s -- "
+        f"--server {advertised} --name {name} --token {token} --timer[/]"
+    )
+    console.print("\nOr, if pibackup is already installed:")
     console.print(f"  [bold]pibackup connect {advertised} --name {name} --token {token}[/]")
 
 
