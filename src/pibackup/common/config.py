@@ -54,6 +54,7 @@ class Config:
     server_url: str = "http://127.0.0.1:8765"
     repo_target: Optional[str] = None  # rsync destination base for the client
     recipient: Optional[str] = None  # age public key for encrypted jobs
+    authorized_keys: Optional[str] = None  # server: append enrolled SSH keys here
     client_name: str = field(default_factory=socket.gethostname)
 
 
@@ -87,6 +88,7 @@ def load_config() -> Config:
         server_url=overrides.get("server_url", "http://127.0.0.1:8765"),
         repo_target=overrides.get("repo_target"),
         recipient=overrides.get("recipient"),
+        authorized_keys=overrides.get("authorized_keys"),
         client_name=overrides.get("client_name", socket.gethostname()),
     )
 

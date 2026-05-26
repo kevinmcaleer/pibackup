@@ -11,6 +11,7 @@ Phase 7 will replay this onto a fresh SD card; Phase 6 just captures it.
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import socket
 import subprocess
@@ -80,3 +81,40 @@ def write(path: str | Path) -> Path:
     p = Path(path)
     p.write_text(to_json())
     return p
+
+
+def render_restore_script(manifest: dict) -> str:
+    """Generate a shell script that replays a manifest onto a fresh system:
+    hostname, apt packages, pip packages, enabled systemd services.
+
+    The file restore (snapshot contents) is handled separately by
+    ``pibackup restore``; this rebuilds the surrounding system state.
+    """
+    out = [
+        "#!/bin/sh",
+        f"# pibackup system restore — from manifest captured {manifest.get('captured_at', '?')}",
+        "# Review before running. Intended to run as root on a fresh install.",
+        "set -e",
+        "",
+    ]
+
+    host = manifest.get("hostname")
+    if host:
+        out += ["# hostname", f"hostnamectl set-hostname {shlex.quote(host)}", ""]
+
+    apt = manifest.get("apt_manual") or []
+    if apt:
+        pkgs = " ".join(shlex.quote(p) for p in apt)
+        out += ["# apt packages", "apt-get update", f"apt-get install -y {pkgs}", ""]
+
+    pip = manifest.get("pip_freeze") or []
+    if pip:
+        pkgs = " ".join(shlex.quote(p) for p in pip)
+        out += ["# pip packages", f"pip install {pkgs}", ""]
+
+    services = manifest.get("systemd_enabled") or []
+    if services:
+        svc = " ".join(shlex.quote(s) for s in services)
+        out += ["# systemd services", f"systemctl enable {svc}", ""]
+
+    return "\n".join(out) + "\n"

@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS snapshots (
     encrypted  INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS enroll_tokens (
+    token       TEXT PRIMARY KEY,
+    client_name TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    used        INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_client    ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS idx_runs_job       ON runs(job_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status    ON runs(status);
