@@ -22,9 +22,15 @@ server = [
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
 ]
+crypto = [
+    "pyrage>=1.1",
+    "zstandard>=0.22",
+]
 dev = [
     "pytest>=8",
     "httpx>=0.27",
+    "pyrage>=1.1",
+    "zstandard>=0.22",
 ]
 
 # One binary, Docker-style: `pibackup <resource> <verb>` plus `pibackup serve`.

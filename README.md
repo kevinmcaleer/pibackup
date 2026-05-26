@@ -4,11 +4,12 @@ Self-contained backup system for Raspberry Pi. Pi clients push their files to a
 central server that owns the repository, tracks job status and retention, and
 serves a dashboard. CLI-first with a Docker-style command grammar.
 
-> Status: **Phase 3 — web dashboard.** A REST API hosts job config and
+> Status: **Phase 4 — encryption.** A REST API hosts job config and
 > run/snapshot reporting; clients fetch jobs, rsync to the repo, and report
 > results, with the server pruning expired snapshots and serving a status
-> dashboard. The CLI uses the server when reachable and falls back to standalone
-> (config.toml + local db). Encryption and restore arrive in later phases. See
+> dashboard. Jobs can be encrypted client-side with age — the server only ever
+> stores opaque blobs. The CLI uses the server when reachable and falls back to
+> standalone (config.toml + local db). Restore arrives next. See
 > [`docs/PLAN.md`](docs/PLAN.md) for the full plan.
 
 ## Install (development)
@@ -60,6 +61,21 @@ sources = ["/home/pi"]
 retention_days = 30
 bwlimit_kbps = 0          # 0 = unlimited
 ```
+
+## Encrypted backups
+
+Encrypted jobs are streamed `tar | zstd | age` into one archive per snapshot, so
+the server stores only opaque blobs. Needs the crypto extra:
+
+```bash
+pip install 'pibackup[crypto]'
+pibackup key create               # generate an age key (auto-used as recipient)
+pibackup key ls                   # list keys + public recipients
+```
+
+Mark a job `encrypted = true` (or `--encrypt` on `job create`). The recipient is
+your only key by default, or set `recipient = "age1…"` in `config.toml`. Keep the
+key safe — it's required to restore.
 
 ## CLI
 
