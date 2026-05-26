@@ -326,31 +326,70 @@ def client_rm(client: str = typer.Argument(..., help="Client id or name.")):
 
 
 # ===== key =====
+def _require_crypto() -> None:
+    from pibackup.common.crypto import crypto_available
+
+    if not crypto_available():
+        console.print(
+            "[red]Encryption libraries missing.[/] Install with: "
+            "[bold]pip install 'pibackup[crypto]'[/]"
+        )
+        raise typer.Exit(1)
+
+
 @key_app.command("ls")
 def key_ls(
     fmt: OutputFormat = typer.Option(OutputFormat.table, "--format", "-f", help="Output format."),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Only show IDs."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Only show names."),
 ):
     """List age encryption keys."""
-    _render("Keys", ["KEY ID", "NAME", "RECIPIENT"], [], fmt, quiet)
+    from pibackup.client import keys
+
+    rows = [(k["name"], k["recipient"], k["created"]) for k in keys.list_keys()]
+    _render("Keys", ["NAME", "RECIPIENT", "CREATED"], rows, fmt, quiet)
 
 
 @key_app.command("create")
-def key_create():
+def key_create(name: str = typer.Argument("default", help="Key name.")):
     """Generate a new age key pair."""
-    _planned("key create", 4)
+    from pibackup.client import keys
+
+    _require_crypto()
+    try:
+        recipient, path = keys.create_key(name)
+    except FileExistsError:
+        console.print(f"[red]Key already exists:[/] {name}")
+        raise typer.Exit(1)
+    console.print(f"[green]Created age key[/] [bold]{name}[/] → {path}")
+    console.print(f"  public recipient: [cyan]{recipient}[/]")
+    console.print(
+        "[dim]It's used automatically if it's your only key, or set "
+        f'recipient = "{recipient}" in config.toml.[/]'
+    )
 
 
 @key_app.command("export")
-def key_export():
-    """Export an age public key (recipient)."""
-    _planned("key export", 4)
+def key_export(name: str = typer.Argument("default", help="Key name.")):
+    """Print an age public key (recipient)."""
+    from pibackup.client import keys
+
+    _require_crypto()
+    try:
+        typer.echo(keys.export_key(name))
+    except FileNotFoundError:
+        console.print(f"[red]No such key:[/] {name}")
+        raise typer.Exit(1)
 
 
 @key_app.command("rm")
-def key_rm(key: str = typer.Argument(..., help="Key id or name.")):
+def key_rm(key: str = typer.Argument(..., help="Key name.")):
     """Remove an age key."""
-    _planned("key rm", 4)
+    from pibackup.client import keys
+
+    if not keys.remove_key(key):
+        console.print(f"[red]No such key:[/] {key}")
+        raise typer.Exit(1)
+    console.print(f"[green]Removed key[/] {key}.")
 
 
 # ===== top-level shortcuts =====
@@ -393,10 +432,24 @@ def run(
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
+    # Resolve an encryption recipient if any selected job needs one.
+    recipient = None
+    if any(s.encrypted for s in specs):
+        from pibackup.client import keys
+
+        _require_crypto()
+        recipient = cfg.recipient or keys.default_recipient()
+        if not recipient:
+            console.print(
+                "[red]An encrypted job is selected but no recipient is set.[/] "
+                "Run [bold]pibackup key create[/] or set recipient in config.toml."
+            )
+            raise typer.Exit(1)
+
     failures = 0
     for spec in specs:
         with console.status(f"Backing up [bold]{spec.name}[/] → {cfg.repo_target} …"):
-            res = engine.run_job(spec, dry_run=dry_run)
+            res = engine.run_job(spec, dry_run=dry_run, recipient=recipient)
         icon = "[green]✓[/]" if res.ok else "[red]✗[/]"
         verb = "would back up" if dry_run else ("backed up" if res.ok else "failed")
         suffix = f"  → {res.snapshot}" if res.snapshot else ""

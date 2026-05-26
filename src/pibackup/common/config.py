@@ -53,6 +53,7 @@ class Config:
     db_path: Path  # SQLite database
     server_url: str = "http://127.0.0.1:8765"
     repo_target: Optional[str] = None  # rsync destination base for the client
+    recipient: Optional[str] = None  # age public key for encrypted jobs
     client_name: str = field(default_factory=socket.gethostname)
 
 
@@ -85,6 +86,7 @@ def load_config() -> Config:
         db_path=Path(overrides.get("db_path", ddir / "pibackup.db")),
         server_url=overrides.get("server_url", "http://127.0.0.1:8765"),
         repo_target=overrides.get("repo_target"),
+        recipient=overrides.get("recipient"),
         client_name=overrides.get("client_name", socket.gethostname()),
     )
 
