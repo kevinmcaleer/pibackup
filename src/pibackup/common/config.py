@@ -55,6 +55,7 @@ class Config:
     repo_target: Optional[str] = None  # rsync destination base for the client
     recipient: Optional[str] = None  # age public key for encrypted jobs
     authorized_keys: Optional[str] = None  # server: append enrolled SSH keys here
+    background: bool = True  # run backup transfers under nice/ionice
     client_name: str = field(default_factory=socket.gethostname)
 
 
@@ -89,6 +90,7 @@ def load_config() -> Config:
         repo_target=overrides.get("repo_target"),
         recipient=overrides.get("recipient"),
         authorized_keys=overrides.get("authorized_keys"),
+        background=bool(overrides.get("background", True)),
         client_name=overrides.get("client_name", socket.gethostname()),
     )
 

@@ -1,0 +1,12 @@
+# Runs pibackup daily with a randomised delay so many Pis don't hit the server
+# at once. Catches up after downtime (Persistent=true).
+[Unit]
+Description=Run pibackup daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

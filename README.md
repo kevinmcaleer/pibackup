@@ -4,14 +4,15 @@ Self-contained backup system for Raspberry Pi. Pi clients push their files to a
 central server that owns the repository, tracks job status and retention, and
 serves a dashboard. CLI-first with a Docker-style command grammar.
 
-> Status: **Phase 5 — TUI.** A REST API hosts job config and run/snapshot
-> reporting; clients enroll with a one-line token, rsync to the repo, and report
-> results, with the server pruning expired snapshots and serving a status
-> dashboard. Jobs can be encrypted client-side with age, snapshots restore
-> (plaintext or encrypted), a captured system manifest can be replayed onto a
-> fresh SD card, and a Textual TUI browses jobs/snapshots/runs and triggers
-> backups. The CLI uses the server when reachable and falls back to standalone.
-> Only final polish (Phase 8) remains. See [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **all phases complete (0–8).** A REST API hosts job config and
+> run/snapshot reporting; clients enroll with a one-line bootstrap, rsync to the
+> repo (under nice/ionice + a daily systemd timer), and report results, with the
+> server pruning expired snapshots and serving a status dashboard. Jobs can be
+> encrypted client-side with age, snapshots restore (plaintext or encrypted), a
+> captured system manifest can be replayed onto a fresh SD card, and there's a
+> CLI, a Textual TUI, and a browser dashboard. The CLI uses the server when
+> reachable and falls back to standalone. See [`docs/PLAN.md`](docs/PLAN.md) and
+> [`deploy/`](deploy/) for deployment.
 
 ## Install (development)
 
@@ -133,8 +134,21 @@ pibackup serve             # run the server (API + dashboard)
 
 Every `ls` supports `--format json` and `-q/--quiet`, like Docker.
 
+## Deploy & scheduling
+
+systemd unit templates and an installer live in [`deploy/`](deploy/). In short —
+on the server run `pibackup serve` (or the `pibackup-server.service` unit); on
+each Pi, the `pibackup enroll` one-liner installs pibackup, enrolls, and enables
+a daily backup timer. Backups run under `nice`/`ionice` and honour each job's
+`bwlimit_kbps`, so they stay out of the way of foreground work. See
+[`deploy/README.md`](deploy/README.md).
+
+The three interfaces — CLI, Textual `tui`, and the browser dashboard at the
+server's `/` — cover terminal, TUI, and "windowed" use without a native GUI dep.
+
 ## Test
 
 ```bash
+pip install -e ".[server,dev,crypto,tui]"
 pytest
 ```
