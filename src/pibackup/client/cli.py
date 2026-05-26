@@ -399,69 +399,28 @@ def run(
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would transfer without writing."),
 ):
     """Run a backup now."""
+    from pibackup.client import runner
     from pibackup.client.api import ApiError
-    from pibackup.client.engine import BackupEngine
-    from pibackup.client.reporter import ApiReporter, LocalReporter
-    from pibackup.common.config import config_file, load_config
 
-    cfg = load_config()
-    server = _server()
+    def show(name: str, res) -> None:
+        icon = "[green]✓[/]" if res.ok else "[red]✗[/]"
+        verb = "would back up" if dry_run else ("backed up" if res.ok else "failed")
+        suffix = f"  → {res.snapshot}" if res.snapshot else ""
+        console.print(f"{icon} [bold]{name}[/] {verb}: {res.message}{suffix}")
+
     try:
-        reporter = ApiReporter(cfg, server) if server else LocalReporter(cfg)
+        with console.status("Backing up …"):
+            results = runner.run_jobs(job, dry_run=dry_run, on_result=show)
+    except runner.RunError as exc:
+        console.print(f"[red]{exc}[/]")
+        if not exc.server_backed and "no jobs" in str(exc):
+            _config_hint()
+        raise typer.Exit(1)
     except ApiError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
 
-    specs = reporter.jobs()
-    if not specs:
-        if reporter.server_backed:
-            console.print("[yellow]No jobs on the server for this client.[/] Create one: [bold]pibackup job create NAME -s /path[/]")
-        else:
-            console.print(f"[yellow]No jobs configured[/] in {config_file()}.")
-            _config_hint()
-        raise typer.Exit(1)
-    if job:
-        specs = [s for s in specs if s.name == job]
-        if not specs:
-            console.print(f"[red]No such job:[/] {job}")
-            raise typer.Exit(1)
-
-    try:
-        engine = BackupEngine(cfg)
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/]")
-        raise typer.Exit(1)
-
-    # Resolve an encryption recipient if any selected job needs one.
-    recipient = None
-    if any(s.encrypted for s in specs):
-        from pibackup.client import keys
-
-        _require_crypto()
-        recipient = cfg.recipient or keys.default_recipient()
-        if not recipient:
-            console.print(
-                "[red]An encrypted job is selected but no recipient is set.[/] "
-                "Run [bold]pibackup key create[/] or set recipient in config.toml."
-            )
-            raise typer.Exit(1)
-
-    failures = 0
-    for spec in specs:
-        with console.status(f"Backing up [bold]{spec.name}[/] → {cfg.repo_target} …"):
-            res = engine.run_job(spec, dry_run=dry_run, recipient=recipient)
-        icon = "[green]✓[/]" if res.ok else "[red]✗[/]"
-        verb = "would back up" if dry_run else ("backed up" if res.ok else "failed")
-        suffix = f"  → {res.snapshot}" if res.snapshot else ""
-        console.print(f"{icon} [bold]{spec.name}[/] {verb}: {res.message}{suffix}")
-        if not dry_run:
-            try:
-                reporter.record(spec, res)
-            except ApiError as exc:
-                console.print(f"[yellow]  (failed to report run: {exc})[/]")
-        if not res.ok:
-            failures += 1
-    if failures:
+    if any(not r.ok for r in results):
         raise typer.Exit(code=1)
 
 
@@ -645,6 +604,19 @@ def status():
     table.add_row("repo target", cfg.repo_target or "[dim]unset[/]")
     table.add_row("server url", f"{cfg.server_url} ({'reachable' if reachable else 'unreachable'})")
     console.print(table)
+
+
+@app.command()
+def tui():
+    """Launch the terminal UI (browse jobs/snapshots/runs, trigger backups)."""
+    try:
+        from pibackup.client.tui import PibackupApp
+    except ImportError as exc:
+        console.print(
+            "[red]TUI needs Textual.[/] Install with: [bold]pip install 'pibackup[tui]'[/]"
+        )
+        raise typer.Exit(1) from exc
+    PibackupApp().run()
 
 
 @app.command()

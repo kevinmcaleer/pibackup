@@ -4,14 +4,14 @@ Self-contained backup system for Raspberry Pi. Pi clients push their files to a
 central server that owns the repository, tracks job status and retention, and
 serves a dashboard. CLI-first with a Docker-style command grammar.
 
-> Status: **Phase 7 — onboarding + bare-metal restore.** A REST API hosts job
-> config and run/snapshot reporting; clients enroll with a one-line token, rsync
-> to the repo, and report results, with the server pruning expired snapshots and
-> serving a status dashboard. Jobs can be encrypted client-side with age,
-> snapshots restore (plaintext or encrypted), and a captured system manifest can
-> be replayed onto a fresh SD card. The CLI uses the server when reachable and
-> falls back to standalone. Only the TUI (Phase 5) and final polish (Phase 8)
-> remain. See [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **Phase 5 — TUI.** A REST API hosts job config and run/snapshot
+> reporting; clients enroll with a one-line token, rsync to the repo, and report
+> results, with the server pruning expired snapshots and serving a status
+> dashboard. Jobs can be encrypted client-side with age, snapshots restore
+> (plaintext or encrypted), a captured system manifest can be replayed onto a
+> fresh SD card, and a Textual TUI browses jobs/snapshots/runs and triggers
+> backups. The CLI uses the server when reachable and falls back to standalone.
+> Only final polish (Phase 8) remains. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Install (development)
 
@@ -108,6 +108,13 @@ pibackup recover manifest.json --apply       # …or run it (as root, on a fresh
 Bare-metal restore to a new SD card: install pibackup, `pibackup connect`,
 `pibackup restore <id> --target /`, then `pibackup recover manifest.json --apply`.
 
+## Terminal UI
+
+```bash
+pip install 'pibackup[tui]'
+pibackup tui          # browse jobs/snapshots/runs; press r to run, g to refresh, q to quit
+```
+
 ## CLI
 
 `pibackup <resource> <verb>` with top-level shortcuts:
@@ -119,6 +126,8 @@ pibackup run [JOB]         # run a backup now (--dry-run to preview)
 pibackup ps                # running / recent runs
 pibackup logs RUN          # a run's message
 pibackup snapshot ls       # list stored snapshots
+pibackup restore ID        # restore a snapshot
+pibackup tui               # terminal UI
 pibackup serve             # run the server (API + dashboard)
 ```
 
