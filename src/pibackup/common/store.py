@@ -7,6 +7,7 @@ server will use the same store for job config and reporting (Phase 2).
 from __future__ import annotations
 
 import json
+import secrets
 from pathlib import Path
 from typing import Optional
 
@@ -113,6 +114,57 @@ class Store:
                 "ON CONFLICT(name) DO UPDATE SET hostname=excluded.hostname, "
                 "last_seen=datetime('now')",
                 (name, hostname),
+            )
+            conn.commit()
+            row = conn.execute("SELECT id FROM clients WHERE name = ?", (name,)).fetchone()
+            return int(row["id"])
+        finally:
+            conn.close()
+
+    # -- enrollment --
+    def create_enroll_token(self, client_name: str) -> str:
+        self.ensure_schema()
+        token = secrets.token_urlsafe(24)
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO enroll_tokens (token, client_name) VALUES (?, ?)",
+                (token, client_name),
+            )
+            conn.commit()
+            return token
+        finally:
+            conn.close()
+
+    def consume_enroll_token(self, client_name: str, token: str) -> bool:
+        """Validate a one-time token for a client and mark it used."""
+        if not self.db_path.exists():
+            return False
+        conn = connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT token FROM enroll_tokens WHERE token = ? AND client_name = ? AND used = 0",
+                (token, client_name),
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute("UPDATE enroll_tokens SET used = 1 WHERE token = ?", (token,))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def record_enrollment(self, name: str, hostname: Optional[str], public_key: Optional[str]) -> int:
+        self.ensure_schema()
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """INSERT INTO clients (name, hostname, public_key, enrolled_at, last_seen)
+                   VALUES (?, ?, ?, datetime('now'), datetime('now'))
+                   ON CONFLICT(name) DO UPDATE SET
+                     hostname=excluded.hostname, public_key=excluded.public_key,
+                     enrolled_at=datetime('now'), last_seen=datetime('now')""",
+                (name, hostname, public_key),
             )
             conn.commit()
             row = conn.execute("SELECT id FROM clients WHERE name = ?", (name,)).fetchone()

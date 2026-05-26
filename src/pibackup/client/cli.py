@@ -546,15 +546,84 @@ def manifest(
 
 
 @app.command()
-def connect(url: str = typer.Argument(..., help="Server URL to enroll this Pi against.")):
-    """Enroll this Pi against a server (using an enrollment token)."""
-    _planned("connect", 7)
+def recover(
+    manifest_file: str = typer.Argument(..., help="Path to a captured manifest.json."),
+    output: str = typer.Option("restore-system.sh", "--output", "-o", help="Where to write the restore script."),
+    apply: bool = typer.Option(False, "--apply", help="Run the script now (needs root)."),
+):
+    """Generate (or run) a system-restore script from a manifest."""
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    from pibackup.common import manifest as manifest_mod
+
+    try:
+        data = json.loads(Path(manifest_file).read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        console.print(f"[red]Cannot read manifest:[/] {exc}")
+        raise typer.Exit(1)
+
+    out = Path(output)
+    out.write_text(manifest_mod.render_restore_script(data))
+    os.chmod(out, 0o755)
+    console.print(f"[green]Wrote restore script[/] → {out}")
+    console.print("[dim]Review it, then run as root — restore your files first with `pibackup restore`.[/]")
+
+    if apply:
+        if hasattr(os, "geteuid") and os.geteuid() != 0:
+            console.print("[yellow]--apply needs root.[/]")
+            raise typer.Exit(1)
+        subprocess.run(["sh", str(out)], check=True)
 
 
 @app.command()
-def enroll(name: str = typer.Argument(..., help="Name for the new Pi.")):
+def connect(
+    url: str = typer.Argument(..., help="Server URL, e.g. http://server:8765"),
+    token: str = typer.Option(..., "--token", help="Enrollment token from `pibackup enroll`."),
+    name: Optional[str] = typer.Option(None, "--name", help="Client name (default: hostname)."),
+):
+    """Enroll this Pi against a server using an enrollment token."""
+    from pibackup.client import enroll as enroll_mod
+    from pibackup.client.api import ApiError
+
+    client_name = name or socket.gethostname()
+    try:
+        resp = enroll_mod.connect_to_server(url, client_name, token)
+    except ApiError as exc:
+        console.print(f"[red]Enrollment failed:[/] {exc}")
+        raise typer.Exit(1)
+    except Exception as exc:  # ssh-keygen / fs errors
+        console.print(f"[red]Enrollment error:[/] {exc}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Enrolled[/] as [bold]{client_name}[/] with {url}.")
+    if resp.get("repo_target"):
+        console.print(f"  repo target: {resp['repo_target']}")
+    jobs = resp.get("jobs") or []
+    names = ", ".join(j["name"] for j in jobs)
+    console.print(f"  jobs pulled: {len(jobs)}" + (f" ({names})" if names else ""))
+    console.print("[dim]Your SSH key is registered; run `pibackup run` to back up.[/]")
+
+
+@app.command()
+def enroll(
+    name: str = typer.Argument(..., help="Name for the new Pi."),
+    url: Optional[str] = typer.Option(None, "--url", help="Server URL to advertise (default: server_url from config)."),
+):
     """(Server) Mint a one-line bootstrap + token for a new Pi."""
-    _planned("enroll", 7)
+    from pibackup.common.config import load_config
+    from pibackup.common.store import Store
+
+    cfg = load_config()
+    store = Store(cfg.db_path)
+    store.ensure_client(name, None)
+    token = store.create_enroll_token(name)
+    advertised = url or cfg.server_url
+    console.print(f"[green]Enrollment token for[/] [bold]{name}[/]: [cyan]{token}[/]")
+    console.print("Run this on the new Pi:")
+    console.print(f"  [bold]pibackup connect {advertised} --name {name} --token {token}[/]")
 
 
 @app.command()

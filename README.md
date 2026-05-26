@@ -4,14 +4,14 @@ Self-contained backup system for Raspberry Pi. Pi clients push their files to a
 central server that owns the repository, tracks job status and retention, and
 serves a dashboard. CLI-first with a Docker-style command grammar.
 
-> Status: **Phase 6 — manifest + restore.** A REST API hosts job config and
-> run/snapshot reporting; clients fetch jobs, rsync to the repo, and report
-> results, with the server pruning expired snapshots and serving a status
-> dashboard. Jobs can be encrypted client-side with age (the server stores only
-> opaque blobs), snapshots can be restored (plaintext via reverse rsync,
-> encrypted via decrypt + extract), and a system manifest can be captured. The
-> CLI uses the server when reachable and falls back to standalone. Bare-metal
-> restore + easy onboarding come next. See [`docs/PLAN.md`](docs/PLAN.md).
+> Status: **Phase 7 — onboarding + bare-metal restore.** A REST API hosts job
+> config and run/snapshot reporting; clients enroll with a one-line token, rsync
+> to the repo, and report results, with the server pruning expired snapshots and
+> serving a status dashboard. Jobs can be encrypted client-side with age,
+> snapshots restore (plaintext or encrypted), and a captured system manifest can
+> be replayed onto a fresh SD card. The CLI uses the server when reachable and
+> falls back to standalone. Only the TUI (Phase 5) and final polish (Phase 8)
+> remain. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Install (development)
 
@@ -32,14 +32,17 @@ pibackup serve                              # API + dashboard on http://127.0.0.
 Open `http://server:8765/` for the dashboard: per-Pi jobs, last-run status, and
 recent runs, auto-refreshing every 30s.
 
-On each Pi, point `config.toml` at the server and its repo, then create jobs:
+### Add a new Pi (enrollment)
 
-```toml
-# ~/.config/pibackup/config.toml
-repo_target = "pi@server:/srv/pibackup/repo"   # rsync destination
-client_name = "kitchen-pi"                      # defaults to the hostname
-server_url  = "http://server:8765"
+On the server, mint a token; it prints a one-line bootstrap:
+
+```bash
+pibackup enroll kitchen-pi
+#   pibackup connect http://server:8765 --name kitchen-pi --token <token>
 ```
+
+Run that on the new Pi — it generates an SSH key, registers it with the server,
+and writes `config.toml` pointed at the server and its repo. Then:
 
 ```bash
 pibackup job create home -s /home/pi --retention 30
@@ -47,6 +50,9 @@ pibackup run               # rsync to the repo, report the run to the server
 pibackup ps                # runs (from the server)
 pibackup snapshot prune    # drop snapshots past retention
 ```
+
+(Set `authorized_keys = "/home/backup/.ssh/authorized_keys"` in the server's
+config to auto-authorise enrolled keys for rsync-over-SSH.)
 
 ## Standalone mode
 
@@ -90,12 +96,17 @@ Plaintext snapshots restore via reverse rsync; encrypted ones are fetched and
 decrypted with your local age key. Snapshots preserve absolute paths, so
 `--target /` puts files back where they came from.
 
-## System manifest
+## System manifest & bare-metal restore
 
 ```bash
-pibackup manifest                            # print hostname, packages, services, /etc bits
-pibackup manifest -o manifest.json           # …or save it (add to a job's sources to back it up)
+pibackup manifest -o manifest.json           # capture hostname, packages, services, /etc bits
+                                             # (add it to a job's sources to back it up)
+pibackup recover manifest.json               # generate restore-system.sh (hostname, apt, pip, services)
+pibackup recover manifest.json --apply       # …or run it (as root, on a fresh Pi)
 ```
+
+Bare-metal restore to a new SD card: install pibackup, `pibackup connect`,
+`pibackup restore <id> --target /`, then `pibackup recover manifest.json --apply`.
 
 ## CLI
 

@@ -56,6 +56,12 @@ class ServerApi:
     def list_clients(self):
         return self._request("GET", "/clients")
 
+    def enroll(self, name: str, token: str, hostname: Optional[str], ssh_public_key: Optional[str]):
+        return self._request(
+            "POST", "/enroll",
+            {"name": name, "token": token, "hostname": hostname, "ssh_public_key": ssh_public_key},
+        )
+
     # jobs
     def get_jobs(self, client_name: str):
         return self._request("GET", f"/clients/{self._seg(client_name)}/jobs")

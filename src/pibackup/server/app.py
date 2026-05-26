@@ -8,6 +8,7 @@ Reporting a run also prunes that job's expired snapshots.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel
@@ -45,6 +46,28 @@ class RunIn(BaseModel):
     snapshot_path: Optional[str] = None
     snapshot_size: int = 0
     encrypted: bool = False
+
+
+class EnrollIn(BaseModel):
+    name: str
+    token: str
+    hostname: Optional[str] = None
+    ssh_public_key: Optional[str] = None
+
+
+def _append_authorized_key(path: str, public_key: str, name: str) -> None:
+    """Best-effort: add an enrolled client's SSH key to authorized_keys."""
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        existing = p.read_text() if p.exists() else ""
+        if public_key.strip() in existing:
+            return
+        with p.open("a") as fh:
+            fh.write(f"{public_key.strip()}  # pibackup:{name}\n")
+        p.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _job_out(row: dict) -> dict:
@@ -87,6 +110,20 @@ def create_app(config: Optional[Config] = None):
     @api.get("/", response_class=HTMLResponse)
     def index():
         return render_dashboard(store)
+
+    # ---- enrollment ----
+    @api.post("/enroll")
+    def enroll(body: EnrollIn):
+        if not store.consume_enroll_token(body.name, body.token):
+            raise HTTPException(403, "invalid or already-used enrollment token")
+        store.record_enrollment(body.name, body.hostname, body.ssh_public_key)
+        if cfg.authorized_keys and body.ssh_public_key:
+            _append_authorized_key(cfg.authorized_keys, body.ssh_public_key, body.name)
+        return {
+            "ok": True,
+            "repo_target": cfg.repo_target or str(cfg.repo_dir),
+            "jobs": [_job_out(r) for r in store.jobs_for_client(body.name)],
+        }
 
     # ---- clients ----
     @api.post("/clients")
