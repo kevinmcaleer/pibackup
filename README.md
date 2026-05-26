@@ -4,11 +4,11 @@ Self-contained backup system for Raspberry Pi. Pi clients push their files to a
 central server that owns the repository, tracks job status and retention, and
 serves a dashboard. CLI-first with a Docker-style command grammar.
 
-> Status: **Phase 2 — server, jobs & retention.** A REST API hosts job config
-> and run/snapshot reporting; clients fetch their jobs, rsync to the repo, and
-> report results, with the server pruning expired snapshots. The CLI uses the
-> server when reachable and falls back to standalone (config.toml + local db).
-> Encryption and restore arrive in later phases. See
+> Status: **Phase 3 — web dashboard.** A REST API hosts job config and
+> run/snapshot reporting; clients fetch jobs, rsync to the repo, and report
+> results, with the server pruning expired snapshots and serving a status
+> dashboard. The CLI uses the server when reachable and falls back to standalone
+> (config.toml + local db). Encryption and restore arrive in later phases. See
 > [`docs/PLAN.md`](docs/PLAN.md) for the full plan.
 
 ## Install (development)
@@ -24,8 +24,11 @@ pip install -e ".[server,dev]"
 On the server, start the daemon (it hosts the repo + job config):
 
 ```bash
-pibackup serve                              # API on http://127.0.0.1:8765
+pibackup serve                              # API + dashboard on http://127.0.0.1:8765
 ```
+
+Open `http://server:8765/` for the dashboard: per-Pi jobs, last-run status, and
+recent runs, auto-refreshing every 30s.
 
 On each Pi, point `config.toml` at the server and its repo, then create jobs:
 
