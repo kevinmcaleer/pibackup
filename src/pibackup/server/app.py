@@ -17,6 +17,7 @@ from pibackup.common.config import Config, JobSpec, load_config
 from pibackup.common.db import init_db
 from pibackup.common.store import Store
 from pibackup.server import retention
+from pibackup.server.dashboard import render_dashboard
 
 
 # Request models live at module level so FastAPI can resolve them even with
@@ -63,6 +64,7 @@ def _job_out(row: dict) -> dict:
 
 def create_app(config: Optional[Config] = None):
     from fastapi import FastAPI, HTTPException
+    from fastapi.responses import HTMLResponse
 
     cfg = config or load_config()
     init_db(cfg.db_path)
@@ -82,9 +84,9 @@ def create_app(config: Optional[Config] = None):
     def health():
         return {"status": "ok"}
 
-    @api.get("/")
+    @api.get("/", response_class=HTMLResponse)
     def index():
-        return {"service": "pibackup", "version": __version__, "dashboard": "planned: Phase 3"}
+        return render_dashboard(store)
 
     # ---- clients ----
     @api.post("/clients")
