@@ -4,13 +4,14 @@ Self-contained backup system for Raspberry Pi. Pi clients push their files to a
 central server that owns the repository, tracks job status and retention, and
 serves a dashboard. CLI-first with a Docker-style command grammar.
 
-> Status: **Phase 4 — encryption.** A REST API hosts job config and
+> Status: **Phase 6 — manifest + restore.** A REST API hosts job config and
 > run/snapshot reporting; clients fetch jobs, rsync to the repo, and report
 > results, with the server pruning expired snapshots and serving a status
-> dashboard. Jobs can be encrypted client-side with age — the server only ever
-> stores opaque blobs. The CLI uses the server when reachable and falls back to
-> standalone (config.toml + local db). Restore arrives next. See
-> [`docs/PLAN.md`](docs/PLAN.md) for the full plan.
+> dashboard. Jobs can be encrypted client-side with age (the server stores only
+> opaque blobs), snapshots can be restored (plaintext via reverse rsync,
+> encrypted via decrypt + extract), and a system manifest can be captured. The
+> CLI uses the server when reachable and falls back to standalone. Bare-metal
+> restore + easy onboarding come next. See [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Install (development)
 
@@ -76,6 +77,25 @@ pibackup key ls                   # list keys + public recipients
 Mark a job `encrypted = true` (or `--encrypt` on `job create`). The recipient is
 your only key by default, or set `recipient = "age1…"` in `config.toml`. Keep the
 key safe — it's required to restore.
+
+## Restore
+
+```bash
+pibackup snapshot ls                         # find the snapshot id
+pibackup restore 12                          # → ./pibackup-restore-12/ (safe default)
+pibackup restore 12 --target /               # restore to original paths (in place)
+```
+
+Plaintext snapshots restore via reverse rsync; encrypted ones are fetched and
+decrypted with your local age key. Snapshots preserve absolute paths, so
+`--target /` puts files back where they came from.
+
+## System manifest
+
+```bash
+pibackup manifest                            # print hostname, packages, services, /etc bits
+pibackup manifest -o manifest.json           # …or save it (add to a job's sources to back it up)
+```
 
 ## CLI
 

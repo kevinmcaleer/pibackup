@@ -176,6 +176,11 @@ class Destination:
         """Absolute path on the destination side (for ``--link-dest``)."""
         return self._abs(subpath)
 
+    def rsync_source(self, abspath: str) -> str:
+        """An rsync source string for an absolute path on the destination
+        (used by restore: ``host:/path`` if remote, else the local path)."""
+        return f"{self.host}:{abspath}" if self.is_remote else abspath
+
     def _ssh(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["ssh", self.host, *args], capture_output=True, text=True)
 

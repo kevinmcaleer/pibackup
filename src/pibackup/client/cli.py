@@ -495,11 +495,54 @@ def logs(run: int = typer.Argument(..., help="Run id.")):
 
 @app.command()
 def restore(
-    snapshot: str = typer.Argument(..., help="Snapshot id to restore from."),
-    path: Optional[str] = typer.Argument(None, help="Restore target (default: original location)."),
+    snapshot: int = typer.Argument(..., help="Snapshot id (see `pibackup snapshot ls`)."),
+    target: Optional[str] = typer.Option(
+        None, "--target", "-t",
+        help="Restore into this directory (default: ./pibackup-restore-<id>; use / for original paths).",
+    ),
 ):
     """Restore files from a snapshot."""
-    _planned("restore", 6)
+    from pibackup.client.restore import restore_snapshot
+    from pibackup.common.config import load_config
+
+    cfg = load_config()
+    server = _server()
+    snaps = (server.list_snapshots() or []) if server else _local_store().list_snapshots()
+    snap = next((s for s in snaps if s["id"] == snapshot), None)
+    if not snap:
+        console.print(f"[red]No such snapshot:[/] {snapshot}")
+        raise typer.Exit(1)
+    if not cfg.repo_target:
+        console.print("[red]No repo_target configured[/] — can't locate the snapshot.")
+        raise typer.Exit(1)
+    if snap.get("encrypted"):
+        _require_crypto()
+
+    target_dir = target or f"./pibackup-restore-{snapshot}"
+    with console.status(f"Restoring snapshot {snapshot} → {target_dir} …"):
+        res = restore_snapshot(cfg, snap, target_dir)
+    if res.ok:
+        console.print(f"[green]Restored[/] snapshot {snapshot} → {res.target} ({res.message})")
+    else:
+        console.print(f"[red]Restore failed:[/] {res.message}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def manifest(
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Write JSON here (default: stdout)."),
+):
+    """Capture a system manifest (hostname, packages, services, /etc bits)."""
+    from pibackup.common import manifest as manifest_mod
+
+    text = manifest_mod.to_json()
+    if output:
+        from pathlib import Path
+
+        Path(output).write_text(text)
+        console.print(f"[green]Wrote manifest[/] → {output}")
+    else:
+        typer.echo(text)
 
 
 @app.command()
