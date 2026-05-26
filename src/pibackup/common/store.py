@@ -1,0 +1,236 @@
+"""Database access shared by client and server.
+
+The client uses this to record its own runs/snapshots locally (Phase 1); the
+server will use the same store for job config and reporting (Phase 2).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Optional
+
+from pibackup.common.config import JobSpec
+from pibackup.common.db import connect, init_db
+
+
+class Store:
+    def __init__(self, db_path: Path | str):
+        self.db_path = Path(db_path)
+
+    # -- reads (safe before the db exists) --
+    def _query(self, sql: str, params: tuple = ()) -> list[dict]:
+        if not self.db_path.exists():
+            return []
+        conn = connect(self.db_path)
+        try:
+            return [dict(row) for row in conn.execute(sql, params)]
+        finally:
+            conn.close()
+
+    def list_clients(self) -> list[dict]:
+        return self._query("SELECT * FROM clients ORDER BY name")
+
+    def get_client_by_name(self, name: str) -> Optional[dict]:
+        rows = self._query("SELECT * FROM clients WHERE name = ?", (name,))
+        return rows[0] if rows else None
+
+    def get_job(self, job_id: int) -> Optional[dict]:
+        rows = self._query(
+            """SELECT j.*, c.name AS client_name
+               FROM jobs j JOIN clients c ON c.id = j.client_id
+               WHERE j.id = ?""",
+            (job_id,),
+        )
+        return rows[0] if rows else None
+
+    def jobs_for_client(self, client_name: str) -> list[dict]:
+        return self._query(
+            """SELECT j.*, c.name AS client_name
+               FROM jobs j JOIN clients c ON c.id = j.client_id
+               WHERE c.name = ? ORDER BY j.name""",
+            (client_name,),
+        )
+
+    def get_run(self, run_id: int) -> Optional[dict]:
+        rows = self._query(
+            """SELECT r.*, j.name AS job_name
+               FROM runs r JOIN jobs j ON j.id = r.job_id WHERE r.id = ?""",
+            (run_id,),
+        )
+        return rows[0] if rows else None
+
+    def get_snapshot(self, snap_id: int) -> Optional[dict]:
+        rows = self._query(
+            """SELECT s.*, j.name AS job_name
+               FROM snapshots s JOIN jobs j ON j.id = s.job_id WHERE s.id = ?""",
+            (snap_id,),
+        )
+        return rows[0] if rows else None
+
+    def list_expired_snapshots(self) -> list[dict]:
+        """Snapshots older than their job's retention window (0 = keep forever)."""
+        return self._query(
+            """SELECT s.*, j.retention_days, j.name AS job_name
+               FROM snapshots s JOIN jobs j ON j.id = s.job_id
+               WHERE j.retention_days > 0
+                 AND datetime(s.created_at)
+                     < datetime('now', '-' || j.retention_days || ' days')"""
+        )
+
+    def list_jobs(self) -> list[dict]:
+        return self._query(
+            """SELECT j.*, c.name AS client_name
+               FROM jobs j JOIN clients c ON c.id = j.client_id
+               ORDER BY c.name, j.name"""
+        )
+
+    def list_runs(self, limit: int = 50) -> list[dict]:
+        return self._query(
+            """SELECT r.*, j.name AS job_name
+               FROM runs r JOIN jobs j ON j.id = r.job_id
+               ORDER BY r.started_at DESC, r.id DESC LIMIT ?""",
+            (limit,),
+        )
+
+    def list_snapshots(self) -> list[dict]:
+        return self._query(
+            """SELECT s.*, j.name AS job_name
+               FROM snapshots s JOIN jobs j ON j.id = s.job_id
+               ORDER BY s.created_at DESC, s.id DESC"""
+        )
+
+    # -- writes --
+    def ensure_schema(self) -> None:
+        init_db(self.db_path)
+
+    def ensure_client(self, name: str, hostname: Optional[str] = None) -> int:
+        self.ensure_schema()
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT INTO clients (name, hostname) VALUES (?, ?) "
+                "ON CONFLICT(name) DO UPDATE SET hostname=excluded.hostname, "
+                "last_seen=datetime('now')",
+                (name, hostname),
+            )
+            conn.commit()
+            row = conn.execute("SELECT id FROM clients WHERE name = ?", (name,)).fetchone()
+            return int(row["id"])
+        finally:
+            conn.close()
+
+    def ensure_job(self, client_id: int, spec: JobSpec) -> int:
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """INSERT INTO jobs (client_id, name, source_paths, retention_days,
+                                     encrypted, bwlimit_kbps)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(client_id, name) DO UPDATE SET
+                     source_paths=excluded.source_paths,
+                     retention_days=excluded.retention_days,
+                     encrypted=excluded.encrypted,
+                     bwlimit_kbps=excluded.bwlimit_kbps""",
+                (
+                    client_id,
+                    spec.name,
+                    json.dumps(spec.sources),
+                    spec.retention_days,
+                    int(spec.encrypted),
+                    spec.bwlimit_kbps or None,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT id FROM jobs WHERE client_id = ? AND name = ?",
+                (client_id, spec.name),
+            ).fetchone()
+            return int(row["id"])
+        finally:
+            conn.close()
+
+    def delete_job(self, job_id: int) -> None:
+        conn = connect(self.db_path)
+        try:
+            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def record_run(
+        self,
+        job_id: int,
+        status: str,
+        bytes_transferred: int,
+        message: str,
+        started_at: Optional[str] = None,
+        finished_at: Optional[str] = None,
+    ) -> int:
+        """Insert a completed run, defaulting timestamps to now if not given."""
+        self.ensure_schema()
+        conn = connect(self.db_path)
+        try:
+            cur = conn.execute(
+                """INSERT INTO runs (job_id, started_at, finished_at, status,
+                                     bytes_transferred, message)
+                   VALUES (?, COALESCE(?, datetime('now')),
+                           COALESCE(?, datetime('now')), ?, ?, ?)""",
+                (job_id, started_at, finished_at, status, bytes_transferred, message),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        finally:
+            conn.close()
+
+    def delete_snapshot_row(self, snap_id: int) -> None:
+        conn = connect(self.db_path)
+        try:
+            conn.execute("DELETE FROM snapshots WHERE id = ?", (snap_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def start_run(self, job_id: int) -> int:
+        conn = connect(self.db_path)
+        try:
+            cur = conn.execute(
+                "INSERT INTO runs (job_id, status) VALUES (?, 'running')", (job_id,)
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        finally:
+            conn.close()
+
+    def finish_run(self, run_id: int, status: str, bytes_transferred: int, message: str) -> None:
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """UPDATE runs SET finished_at=datetime('now'), status=?,
+                       bytes_transferred=?, message=? WHERE id=?""",
+                (status, bytes_transferred, message, run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def add_snapshot(
+        self,
+        job_id: int,
+        run_id: int,
+        path: str,
+        size_bytes: int,
+        encrypted: bool,
+        created_at: Optional[str] = None,
+    ) -> int:
+        conn = connect(self.db_path)
+        try:
+            cur = conn.execute(
+                """INSERT INTO snapshots (job_id, run_id, path, size_bytes, encrypted, created_at)
+                   VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+                (job_id, run_id, path, size_bytes, int(encrypted), created_at),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        finally:
+            conn.close()

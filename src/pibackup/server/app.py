@@ -1,0 +1,182 @@
+"""FastAPI application: job config, run/snapshot reporting, and retention.
+
+The server is the source of truth. Clients register, fetch their job config,
+run backups (rsync to ``repo_target``), then report each run + snapshot here.
+Reporting a run also prunes that job's expired snapshots.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Optional
+
+from pydantic import BaseModel
+
+from pibackup import __version__
+from pibackup.common.config import Config, JobSpec, load_config
+from pibackup.common.db import init_db
+from pibackup.common.store import Store
+from pibackup.server import retention
+
+
+# Request models live at module level so FastAPI can resolve them even with
+# `from __future__ import annotations` turning the route hints into strings.
+class ClientIn(BaseModel):
+    name: str
+    hostname: Optional[str] = None
+
+
+class JobIn(BaseModel):
+    name: str
+    sources: list[str]
+    retention_days: int = 30
+    bwlimit_kbps: int = 0
+    encrypted: bool = False
+    schedule: Optional[str] = None
+
+
+class RunIn(BaseModel):
+    status: str
+    bytes_transferred: int = 0
+    message: str = ""
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    snapshot_path: Optional[str] = None
+    snapshot_size: int = 0
+    encrypted: bool = False
+
+
+def _job_out(row: dict) -> dict:
+    """Serialize a job row, decoding source_paths JSON back to a list."""
+    return {
+        "id": row["id"],
+        "client_name": row.get("client_name"),
+        "name": row["name"],
+        "sources": json.loads(row["source_paths"]),
+        "schedule": row.get("schedule"),
+        "retention_days": row["retention_days"],
+        "bwlimit_kbps": row["bwlimit_kbps"] or 0,
+        "encrypted": bool(row["encrypted"]),
+        "created_at": row.get("created_at"),
+    }
+
+
+def create_app(config: Optional[Config] = None):
+    from fastapi import FastAPI, HTTPException
+
+    cfg = config or load_config()
+    init_db(cfg.db_path)
+    store = Store(cfg.db_path)
+    repo_root = str(cfg.repo_dir)
+
+    api = FastAPI(title="pibackup", version=__version__)
+
+    def _require_client(name: str) -> int:
+        client = store.get_client_by_name(name)
+        if client is None:
+            raise HTTPException(404, f"unknown client: {name}")
+        return int(client["id"])
+
+    # ---- meta ----
+    @api.get("/health")
+    def health():
+        return {"status": "ok"}
+
+    @api.get("/")
+    def index():
+        return {"service": "pibackup", "version": __version__, "dashboard": "planned: Phase 3"}
+
+    # ---- clients ----
+    @api.post("/clients")
+    def register_client(body: ClientIn):
+        cid = store.ensure_client(body.name, body.hostname)
+        return {"id": cid, "name": body.name}
+
+    @api.get("/clients")
+    def list_clients():
+        return store.list_clients()
+
+    # ---- jobs ----
+    @api.post("/clients/{client_name}/jobs")
+    def create_job(client_name: str, body: JobIn):
+        cid = _require_client(client_name)
+        spec = JobSpec(
+            name=body.name,
+            sources=body.sources,
+            retention_days=body.retention_days,
+            bwlimit_kbps=body.bwlimit_kbps,
+            encrypted=body.encrypted,
+        )
+        job_id = store.ensure_job(cid, spec)
+        return _job_out(store.get_job(job_id))
+
+    @api.get("/clients/{client_name}/jobs")
+    def jobs_for_client(client_name: str):
+        # Reads are lenient: an unknown client simply has no jobs.
+        return [_job_out(row) for row in store.jobs_for_client(client_name)]
+
+    @api.get("/jobs")
+    def list_jobs():
+        return [_job_out(row) for row in store.list_jobs()]
+
+    @api.get("/jobs/{job_id}")
+    def get_job(job_id: int):
+        row = store.get_job(job_id)
+        if row is None:
+            raise HTTPException(404, f"unknown job: {job_id}")
+        return _job_out(row)
+
+    @api.delete("/jobs/{job_id}")
+    def delete_job(job_id: int):
+        if store.get_job(job_id) is None:
+            raise HTTPException(404, f"unknown job: {job_id}")
+        store.delete_job(job_id)
+        return {"deleted": job_id}
+
+    # ---- runs + snapshots ----
+    @api.post("/jobs/{job_id}/runs")
+    def report_run(job_id: int, body: RunIn):
+        if store.get_job(job_id) is None:
+            raise HTTPException(404, f"unknown job: {job_id}")
+        run_id = store.record_run(
+            job_id, body.status, body.bytes_transferred, body.message,
+            body.started_at, body.finished_at,
+        )
+        snapshot_id = None
+        if body.status == "success" and body.snapshot_path:
+            snapshot_id = store.add_snapshot(
+                job_id, run_id, body.snapshot_path, body.snapshot_size, body.encrypted,
+            )
+        # Server owns retention: prune this job's expired snapshots now.
+        pruned = retention.prune_job(store, job_id, repo_root)
+        return {"run_id": run_id, "snapshot_id": snapshot_id, "pruned": len(pruned)}
+
+    @api.get("/runs")
+    def list_runs(limit: int = 50):
+        return store.list_runs(limit)
+
+    @api.get("/snapshots")
+    def list_snapshots():
+        return store.list_snapshots()
+
+    @api.delete("/snapshots/{snap_id}")
+    def delete_snapshot(snap_id: int):
+        if not retention.delete_snapshot(store, snap_id, repo_root):
+            raise HTTPException(404, f"unknown snapshot: {snap_id}")
+        return {"deleted": snap_id}
+
+    @api.post("/maintenance/prune")
+    def prune():
+        pruned = retention.prune_all(store, repo_root)
+        return {"pruned": len(pruned), "snapshots": [s["id"] for s in pruned]}
+
+    return api
+
+
+def run_server(host: str = "127.0.0.1", port: int = 8765) -> None:
+    import uvicorn
+
+    cfg = load_config()
+    print(f"pibackup {__version__} — repo: {cfg.repo_dir} — db: {cfg.db_path}")
+    print(f"Serving API on http://{host}:{port}")
+    uvicorn.run(create_app(cfg), host=host, port=port)

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pibackup"
+version = "0.0.1"
+description = "Self-contained backup system for Raspberry Pi."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Kevin McAleer", email = "kevinmcaleer@gmail.com" }]
+keywords = ["raspberry-pi", "backup", "rsync", "cli"]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+]
+
+# One binary, Docker-style: `pibackup <resource> <verb>` plus `pibackup serve`.
+[project.scripts]
+pibackup = "pibackup.client.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pibackup"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
