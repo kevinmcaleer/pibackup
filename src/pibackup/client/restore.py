@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from pibackup.common.config import Config
+from pibackup.common.config import Config, ssh_key_path
 from pibackup.common.transfer import Destination, build_rsync_command, run_rsync
 
 
@@ -31,7 +31,8 @@ def restore_snapshot(config: Config, snap: dict, target_dir: str) -> RestoreResu
     if not config.repo_target:
         return RestoreResult(False, target_dir, "no repo_target configured — can't locate the snapshot")
 
-    dest = Destination(config.repo_target)
+    key = ssh_key_path()
+    dest = Destination(config.repo_target, ssh_key=str(key) if key.exists() else None)
     path = snap["path"]
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
@@ -40,7 +41,7 @@ def restore_snapshot(config: Config, snap: dict, target_dir: str) -> RestoreResu
         return _restore_encrypted(dest, path, target)
 
     src = dest.rsync_source(path).rstrip("/") + "/"
-    cmd = build_rsync_command(src, str(target).rstrip("/") + "/", compress=True)
+    cmd = build_rsync_command(src, str(target).rstrip("/") + "/", compress=True, rsh=dest.rsh)
     result = run_rsync(cmd)
     msg = f"restored {result.files_transferred} file(s)" if result.ok else result.message
     return RestoreResult(result.ok, str(target), msg)
@@ -59,7 +60,7 @@ def _restore_encrypted(dest: Destination, path: str, target: Path) -> RestoreRes
     if dest.is_remote:
         tmpdir = tempfile.TemporaryDirectory()
         archive = Path(tmpdir.name) / Path(path).name
-        result = run_rsync(build_rsync_command(f"{dest.host}:{path}", str(archive), compress=False))
+        result = run_rsync(build_rsync_command(f"{dest.host}:{path}", str(archive), compress=False, rsh=dest.rsh))
         if not result.ok:
             tmpdir.cleanup()
             return RestoreResult(False, str(target), result.message)
