@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from pibackup.common.config import Config, JobSpec
+from pibackup.common.config import Config, JobSpec, ssh_key_path
 from pibackup.common.crypto import ARCHIVE_SUFFIX
 from pibackup.common.transfer import (
     Destination,
@@ -64,7 +64,10 @@ class BackupEngine:
                 'repo_target = "pi@server:/srv/pibackup/repo"'
             )
         self.config = config
-        self.dest = Destination(config.repo_target)
+        # Use the enrolled SSH key for remote pushes so no manual ~/.ssh/config
+        # is needed; falls back to default SSH when unenrolled or local.
+        key = ssh_key_path()
+        self.dest = Destination(config.repo_target, ssh_key=str(key) if key.exists() else None)
 
     def _rsync(self, cmd: list[str]):
         """Run rsync, wrapped in nice/ionice when background mode is on."""
@@ -96,7 +99,7 @@ class BackupEngine:
         cmd = build_rsync_command(
             spec.sources, target,
             link_dest=link_dest, bwlimit_kbps=spec.bwlimit_kbps or None,
-            relative=True, dry_run=dry_run,
+            relative=True, dry_run=dry_run, rsh=self.dest.rsh,
         )
         started = _now_iso()
         result = self._rsync(cmd)
@@ -143,6 +146,7 @@ class BackupEngine:
             cmd = build_rsync_command(
                 str(local_archive), self.dest.rsync_target(snap_sub),
                 compress=False, bwlimit_kbps=spec.bwlimit_kbps or None,
+                rsh=self.dest.rsh,
             )
             result = self._rsync(cmd)
         finished = _now_iso()

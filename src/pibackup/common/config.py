@@ -46,6 +46,11 @@ def config_file() -> Path:
     return config_dir() / "config.toml"
 
 
+def ssh_key_path() -> Path:
+    """The SSH identity generated at enrollment, used for rsync-over-SSH."""
+    return config_dir() / "ssh" / "id_ed25519"
+
+
 @dataclass(frozen=True)
 class Config:
     data_dir: Path  # root for all server state

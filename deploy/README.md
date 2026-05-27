@@ -29,7 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/i
 ```
 
 That installs pibackup, enrolls (generating + registering an SSH key), and
-enables the daily backup timer.
+enables the daily backup timer. No SSH setup is needed on the client: backups
+use the enrolled key automatically and trust the server's host key on first
+contact, so there's nothing to add to `~/.ssh/config`.
 
 ## Scheduling
 

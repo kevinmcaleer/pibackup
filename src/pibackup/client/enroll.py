@@ -13,11 +13,7 @@ import subprocess
 from pathlib import Path
 
 from pibackup.client.api import ServerApi
-from pibackup.common.config import JobSpec, config_dir, config_file, load_jobs
-
-
-def ssh_key_path() -> Path:
-    return config_dir() / "ssh" / "id_ed25519"
+from pibackup.common.config import JobSpec, config_file, load_jobs, ssh_key_path
 
 
 def ensure_ssh_key() -> tuple[Path, str]:

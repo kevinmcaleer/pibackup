@@ -36,6 +36,7 @@ def build_rsync_command(
     compress: bool = True,
     relative: bool = False,
     dry_run: bool = False,
+    rsh: Optional[str] = None,
     extra: Optional[Sequence[str]] = None,
 ) -> list[str]:
     """Assemble the rsync argv for a backup push.
@@ -47,6 +48,7 @@ def build_rsync_command(
     - ``-R``            preserve absolute source paths inside the snapshot
     - ``--bwlimit``     background-friendly throttle (our stand-in for BITS)
     - ``--link-dest``   hardlink unchanged files against the previous snapshot
+    - ``-e``            the SSH transport (``rsh``), so the enrolled key is used
     """
     cmd: list[str] = ["rsync", "-a", "--partial", "--stats"]
     if compress:
@@ -55,6 +57,8 @@ def build_rsync_command(
         cmd.append("-R")
     if dry_run:
         cmd.append("-n")
+    if rsh:
+        cmd += ["-e", rsh]
     if bwlimit_kbps:
         cmd.append(f"--bwlimit={bwlimit_kbps}")
     if link_dest:
@@ -145,6 +149,41 @@ def run_rsync(cmd: Sequence[str]) -> RsyncResult:
 
 
 # ---------------------------------------------------------------------------
+# SSH transport: drive rsync/ssh with the pibackup-managed key so a client
+# needs no manual ~/.ssh/config and unattended runs never stall on a prompt.
+# ---------------------------------------------------------------------------
+
+
+def ssh_options(ssh_key: str) -> list[str]:
+    """SSH options for an unattended push with the enrolled key:
+
+    - ``-i``/``IdentitiesOnly`` use *only* this key (ignore the agent/defaults)
+    - ``StrictHostKeyChecking=accept-new`` trust a host the first time, but
+      still refuse if a *known* host key later changes
+    - ``BatchMode=yes`` never prompt — fail fast instead of hanging a timer
+    - ``ConnectTimeout`` bound the wait on an unreachable server
+
+    Assumes a space-free key path (true for the XDG default).
+    """
+    return [
+        "-i", ssh_key,
+        "-o", "IdentitiesOnly=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+    ]
+
+
+def ssh_rsh(ssh_key: Optional[str]) -> Optional[str]:
+    """The rsync ``-e`` transport string for SSH with ``ssh_key``. Returns
+    ``None`` to leave rsync's default SSH untouched (local dest, or a client
+    that hasn't enrolled yet)."""
+    if not ssh_key:
+        return None
+    return "ssh " + " ".join(ssh_options(ssh_key))
+
+
+# ---------------------------------------------------------------------------
 # Destination: a backup repository base, either local or remote (over SSH).
 # ---------------------------------------------------------------------------
 
@@ -169,6 +208,7 @@ class Destination:
     whether it lives on the local filesystem or on a remote host over SSH."""
 
     raw: str
+    ssh_key: Optional[str] = None  # enrolled SSH identity for remote transfers
 
     def __post_init__(self) -> None:
         self.host, self.base_path = _split_target(self.raw)
@@ -176,6 +216,15 @@ class Destination:
     @property
     def is_remote(self) -> bool:
         return self.host is not None
+
+    @property
+    def rsh(self) -> Optional[str]:
+        """rsync ``-e`` transport for a remote destination (None when local)."""
+        return ssh_rsh(self.ssh_key) if self.is_remote else None
+
+    def _ssh_argv(self) -> list[str]:
+        """The ``ssh`` argv prefix, carrying the enrolled key when we have one."""
+        return ["ssh", *(ssh_options(self.ssh_key) if self.ssh_key else [])]
 
     def _abs(self, subpath: str) -> str:
         return f"{self.base_path.rstrip('/')}/{subpath}" if subpath else self.base_path
@@ -195,7 +244,7 @@ class Destination:
         return f"{self.host}:{abspath}" if self.is_remote else abspath
 
     def _ssh(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["ssh", self.host, *args], capture_output=True, text=True)
+        return subprocess.run([*self._ssh_argv(), self.host, *args], capture_output=True, text=True)
 
     def mkdirs(self, subpath: str) -> None:
         path = self._abs(subpath)
