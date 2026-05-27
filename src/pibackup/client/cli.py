@@ -582,13 +582,13 @@ def enroll(
     advertised = url or cfg.server_url
     install_url = "https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh"
     console.print(f"[green]Enrollment token for[/] [bold]{name}[/]: [cyan]{token}[/]")
-    console.print("\nOn a fresh Pi (installs, enrolls, schedules):")
+    console.print("\nOn a fresh Pi (installs, enrolls, schedules — runs as root):")
     console.print(
-        f"  [bold]curl -fsSL {install_url} | sh -s -- "
+        f"  [bold]curl -fsSL {install_url} | sudo sh -s -- "
         f"--server {advertised} --name {name} --token {token} --timer[/]"
     )
     console.print("\nOr, if pibackup is already installed:")
-    console.print(f"  [bold]pibackup connect {advertised} --name {name} --token {token}[/]")
+    console.print(f"  [bold]sudo pibackup connect {advertised} --name {name} --token {token}[/]")
 
 
 @app.command()

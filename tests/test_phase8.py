@@ -77,6 +77,9 @@ def test_install_script_syntax():
     # PEP 668-safe: never the blocked system `pip install --user`; pipx or venv.
     assert "pip install --user" not in text
     assert "pipx" in text and "venv" in text
+    # Runs as root, installing a system timer so backups read every file.
+    assert "id -u" in text  # refuses to run unprivileged
+    assert "/etc/systemd/system" in text  # system (not --user) timer
 
 
 # ---- bootstrap one-liner ----
@@ -85,4 +88,5 @@ def test_cli_enroll_includes_install_oneliner(tmp_path):  # XDG isolated => own 
     assert result.exit_code == 0, result.output
     assert "install.sh" in result.output
     assert "curl -fsSL" in result.output
+    assert "sudo sh -s --" in result.output  # installs as root
     assert "pibackup connect" in result.output
