@@ -79,6 +79,14 @@ class ServerApi:
     def report_run(self, job_id: int, payload: dict):
         return self._request("POST", f"/jobs/{job_id}/runs", payload)
 
+    def start_run(self, job_id: int):
+        """Open a 'running' run and return its id (for live progress)."""
+        return self._request("POST", f"/jobs/{job_id}/runs", {"status": "running"})
+
+    def update_run(self, run_id: int, payload: dict):
+        """Patch a run with a progress tick or a terminal result."""
+        return self._request("PATCH", f"/runs/{run_id}", payload)
+
     def list_runs(self):
         return self._request("GET", "/runs")
 

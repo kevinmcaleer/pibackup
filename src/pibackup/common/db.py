@@ -40,7 +40,12 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at       TEXT,
     status            TEXT NOT NULL DEFAULT 'running',  -- running|success|failure
     bytes_transferred INTEGER NOT NULL DEFAULT 0,
-    message           TEXT
+    message           TEXT,
+    percent           REAL NOT NULL DEFAULT 0,       -- live progress, 0-100
+    transferred       INTEGER NOT NULL DEFAULT 0,    -- bytes moved so far
+    rate              TEXT,                          -- e.g. "1.23MB/s"
+    eta               TEXT,                          -- e.g. "0:01:23"
+    updated_at        TEXT                           -- last progress tick (stall check)
 );
 
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -77,11 +82,31 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the initial release; brought in on existing databases by
+# _migrate() since CREATE TABLE IF NOT EXISTS won't alter an existing table.
+_RUN_COLUMNS = {
+    "percent": "REAL NOT NULL DEFAULT 0",
+    "transferred": "INTEGER NOT NULL DEFAULT 0",
+    "rate": "TEXT",
+    "eta": "TEXT",
+    "updated_at": "TEXT",
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns missing from an older `runs` table (idempotent)."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+    for col, decl in _RUN_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
+
+
 def init_db(db_path: Path | str) -> None:
-    """Create the schema if it does not yet exist (idempotent)."""
+    """Create the schema if it does not yet exist, and migrate older ones."""
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()

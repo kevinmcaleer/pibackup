@@ -101,6 +101,17 @@ class Store:
                ORDER BY s.created_at DESC, s.id DESC"""
         )
 
+    def running_runs(self) -> list[dict]:
+        """In-flight runs with their live progress, newest first."""
+        return self._query(
+            """SELECT r.*, j.name AS job_name, c.name AS client_name
+               FROM runs r
+               JOIN jobs j ON j.id = r.job_id
+               JOIN clients c ON c.id = j.client_id
+               WHERE r.status = 'running'
+               ORDER BY r.started_at DESC, r.id DESC"""
+        )
+
     # -- writes --
     def ensure_schema(self) -> None:
         init_db(self.db_path)
@@ -254,13 +265,31 @@ class Store:
         finally:
             conn.close()
 
+    def update_progress(
+        self, run_id: int, percent: float, transferred: int, rate: Optional[str], eta: Optional[str]
+    ) -> None:
+        """Record a live progress tick for a running run (best-effort)."""
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """UPDATE runs SET percent=?, transferred=?, rate=?, eta=?,
+                       bytes_transferred=?, updated_at=datetime('now')
+                   WHERE id=? AND status='running'""",
+                (percent, transferred, rate, eta, transferred, run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def finish_run(self, run_id: int, status: str, bytes_transferred: int, message: str) -> None:
         conn = connect(self.db_path)
         try:
             conn.execute(
                 """UPDATE runs SET finished_at=datetime('now'), status=?,
-                       bytes_transferred=?, message=? WHERE id=?""",
-                (status, bytes_transferred, message, run_id),
+                       bytes_transferred=?, message=?, updated_at=datetime('now'),
+                       percent=CASE WHEN ?='success' THEN 100 ELSE percent END
+                   WHERE id=?""",
+                (status, bytes_transferred, message, status, run_id),
             )
             conn.commit()
         finally:

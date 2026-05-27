@@ -81,9 +81,18 @@ def run_jobs(
 
     results: list[JobResult] = []
     for spec in specs:
-        res = engine.run_job(spec, dry_run=dry_run, recipient=recipient)
+        run_id = None
+        on_progress = None
         if not dry_run:
-            reporter.record(spec, res)
+            run_id = reporter.start(spec)  # opens a 'running' run for live progress
+            if run_id is not None:
+                on_progress = lambda p, rid=run_id: reporter.progress(rid, p)
+
+        res = engine.run_job(
+            spec, dry_run=dry_run, recipient=recipient, on_progress=on_progress
+        )
+        if not dry_run:
+            reporter.finish(run_id, spec, res)
         results.append(res)
         if on_result:
             on_result(spec.name, res)

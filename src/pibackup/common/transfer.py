@@ -12,9 +12,10 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 # rsync exit codes worth treating as success: 0 = OK, 24 = a source file vanished
 # mid-transfer (benign on a live system).
@@ -37,6 +38,7 @@ def build_rsync_command(
     relative: bool = False,
     dry_run: bool = False,
     rsh: Optional[str] = None,
+    progress: bool = False,
     extra: Optional[Sequence[str]] = None,
 ) -> list[str]:
     """Assemble the rsync argv for a backup push.
@@ -49,6 +51,8 @@ def build_rsync_command(
     - ``--bwlimit``     background-friendly throttle (our stand-in for BITS)
     - ``--link-dest``   hardlink unchanged files against the previous snapshot
     - ``-e``            the SSH transport (``rsh``), so the enrolled key is used
+    - ``--info=progress2`` whole-transfer %/rate/ETA, with a known total
+      (``--no-inc-recursive``) so the percentage is monotonic
     """
     cmd: list[str] = ["rsync", "-a", "--partial", "--stats"]
     if compress:
@@ -59,6 +63,8 @@ def build_rsync_command(
         cmd.append("-n")
     if rsh:
         cmd += ["-e", rsh]
+    if progress:
+        cmd += ["--info=progress2", "--no-inc-recursive"]
     if bwlimit_kbps:
         cmd.append(f"--bwlimit={bwlimit_kbps}")
     if link_dest:
@@ -108,6 +114,35 @@ def parse_rsync_stats(output: str) -> tuple[int, int]:
     return bytes_sent, files
 
 
+@dataclass
+class Progress:
+    """A single rsync ``--info=progress2`` tick for the whole transfer."""
+
+    percent: int
+    transferred: int  # bytes moved so far
+    rate: str  # e.g. "1.23MB/s"
+    eta: str  # e.g. "0:01:23"
+
+
+# A progress2 line: "  1,802,240  45%  800.74kB/s    0:00:02 (xfr#1, to-chk=0/1)"
+_PROGRESS_RE = re.compile(
+    r"(?P<bytes>[\d,]+)\s+(?P<pct>\d+)%\s+(?P<rate>\S+)\s+(?P<eta>\d+:\d{2}:\d{2})"
+)
+
+
+def parse_progress(line: str) -> Optional[Progress]:
+    """Parse one rsync progress2 line, or None if it isn't one."""
+    m = _PROGRESS_RE.search(line)
+    if not m:
+        return None
+    return Progress(
+        percent=int(m.group("pct")),
+        transferred=_to_int(m.group("bytes")),
+        rate=m.group("rate"),
+        eta=m.group("eta"),
+    )
+
+
 def classify_exit(code: int) -> bool:
     return code in _OK_EXIT_CODES
 
@@ -124,28 +159,79 @@ def background_prefix() -> list[str]:
     return prefix
 
 
-def run_rsync(cmd: Sequence[str]) -> RsyncResult:
-    """Execute rsync, capturing output and classifying the outcome."""
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    output = proc.stdout + proc.stderr
-    ok = classify_exit(proc.returncode)
+def _build_result(returncode: int, output: str) -> RsyncResult:
+    ok = classify_exit(returncode)
     bytes_sent, files = parse_rsync_stats(output)
     if ok:
         message = f"transferred {files} file(s), {bytes_sent} bytes"
-        if proc.returncode != 0:
-            message += f" (rsync code {proc.returncode}: {_EXIT_MEANINGS.get(proc.returncode, 'warning')})"
+        if returncode != 0:
+            message += f" (rsync code {returncode}: {_EXIT_MEANINGS.get(returncode, 'warning')})"
     else:
-        meaning = _EXIT_MEANINGS.get(proc.returncode, "rsync failure")
-        first_err = (proc.stderr.strip().splitlines() or ["(no stderr)"])[0]
-        message = f"rsync exit {proc.returncode}: {meaning} — {first_err}"
+        meaning = _EXIT_MEANINGS.get(returncode, "rsync failure")
+        first_err = next((ln for ln in reversed(output.splitlines()) if ln.strip()), "(no output)")
+        message = f"rsync exit {returncode}: {meaning} — {first_err}"
     return RsyncResult(
         ok=ok,
-        exit_code=proc.returncode,
+        exit_code=returncode,
         bytes_transferred=bytes_sent,
         files_transferred=files,
         message=message,
         output=output,
     )
+
+
+def run_rsync(
+    cmd: Sequence[str],
+    on_progress: Optional["Callable[[Progress], None]"] = None,
+    *,
+    interval: float = 1.0,
+) -> RsyncResult:
+    """Execute rsync and classify the outcome.
+
+    Without ``on_progress`` this is a simple blocking call. With it, rsync's
+    output is streamed and each ``--info=progress2`` tick is parsed and handed
+    to the callback (throttled to ``interval`` seconds, with a final tick on
+    completion). Callback exceptions are swallowed so a flaky progress sink can
+    never fail the backup itself.
+    """
+    if on_progress is None:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        return _build_result(proc.returncode, proc.stdout + proc.stderr)
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    assert proc.stdout is not None
+    chunks: list[str] = []
+    line = ""
+    last_emit = 0.0
+    latest: Optional[Progress] = None
+
+    def emit(prog: Progress) -> None:
+        try:
+            on_progress(prog)
+        except Exception:
+            pass
+
+    # rsync overwrites the progress line with carriage returns, so split on both.
+    while True:
+        ch = proc.stdout.read(1)
+        if not ch:
+            break
+        chunks.append(ch)
+        if ch in "\r\n":
+            prog = parse_progress(line)
+            if prog is not None:
+                latest = prog
+                now = time.monotonic()
+                if now - last_emit >= interval:
+                    last_emit = now
+                    emit(prog)
+            line = ""
+        else:
+            line += ch
+    proc.wait()
+    if latest is not None:
+        emit(latest)  # ensure the final (usually 100%) tick is delivered
+    return _build_result(proc.returncode, "".join(chunks))
 
 
 # ---------------------------------------------------------------------------
