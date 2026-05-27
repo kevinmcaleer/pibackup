@@ -74,6 +74,9 @@ def test_install_script_syntax():
     assert "github.com/kevinmcaleer/pibackup" in text
     assert "git+$REPO" in text  # installs from the repo
     assert "connect" in text and "--timer" in text
+    # PEP 668-safe: never the blocked system `pip install --user`; pipx or venv.
+    assert "pip install --user" not in text
+    assert "pipx" in text and "venv" in text
 
 
 # ---- bootstrap one-liner ----
