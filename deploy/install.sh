@@ -23,10 +23,31 @@ while [ $# -gt 0 ]; do
 done
 
 echo "Installing pibackup…"
-if command -v pipx >/dev/null 2>&1; then
+
+install_with_pipx() {
   pipx install "git+$REPO" 2>/dev/null || pipx upgrade pibackup
+}
+
+install_with_venv() {
+  # PEP 668-safe fallback: a self-contained venv, symlinked onto PATH. Used
+  # when pipx isn't available and we can't apt-install it.
+  venv="$HOME/.local/share/pibackup/venv"
+  python3 -m venv "$venv"
+  "$venv/bin/pip" install --quiet --upgrade pip
+  "$venv/bin/pip" install "git+$REPO"
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$venv/bin/pibackup" "$HOME/.local/bin/pibackup"
+}
+
+# Raspberry Pi OS / Debian block system-wide pip (PEP 668), so install via
+# pipx — apt-installing it if needed — and fall back to a private venv.
+if command -v pipx >/dev/null 2>&1; then
+  install_with_pipx
+elif command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 \
+     && sudo apt-get install -y pipx >/dev/null 2>&1; then
+  install_with_pipx
 else
-  python3 -m pip install --user "git+$REPO"
+  install_with_venv
 fi
 
 BIN="$(command -v pibackup || echo "$HOME/.local/bin/pibackup")"
