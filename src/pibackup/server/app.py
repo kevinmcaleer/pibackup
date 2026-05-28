@@ -117,6 +117,9 @@ def create_app(config: Optional[Config] = None):
         if not store.consume_enroll_token(body.name, body.token):
             raise HTTPException(403, "invalid or already-used enrollment token")
         store.record_enrollment(body.name, body.hostname, body.ssh_public_key)
+        # Ensure the client's repo directory exists so rsync can write to it.
+        client_repo = Path(repo_root) / body.name
+        client_repo.mkdir(parents=True, exist_ok=True)
         if cfg.authorized_keys and body.ssh_public_key:
             _append_authorized_key(cfg.authorized_keys, body.ssh_public_key, body.name)
         return {

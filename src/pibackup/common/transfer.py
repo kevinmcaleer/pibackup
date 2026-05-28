@@ -20,6 +20,18 @@ from typing import Optional, Sequence
 # mid-transfer (benign on a live system).
 _OK_EXIT_CODES = {0, 24}
 
+# Directories that are always inaccessible or useless to back up.
+# These are excluded by default so rsync never returns exit 23 for them.
+_DEFAULT_EXCLUDES = [
+    "lost+found",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/tmp",
+    "/var/tmp",
+]
+
 _EXIT_MEANINGS = {
     23: "partial transfer (some files/attrs could not be transferred)",
     24: "some source files vanished during transfer",
@@ -63,6 +75,8 @@ def build_rsync_command(
         cmd.append(f"--bwlimit={bwlimit_kbps}")
     if link_dest:
         cmd.append(f"--link-dest={link_dest}")
+    for exc in _DEFAULT_EXCLUDES:
+        cmd.append(f"--exclude={exc}")
     if extra:
         cmd.extend(extra)
     if isinstance(sources, (str, Path)):
@@ -249,7 +263,11 @@ class Destination:
     def mkdirs(self, subpath: str) -> None:
         path = self._abs(subpath)
         if self.is_remote:
-            self._ssh("mkdir", "-p", shlex.quote(path))
+            result = self._ssh("mkdir", "-p", shlex.quote(path))
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to create remote directory {path}: {result.stderr.strip()}"
+                )
         else:
             Path(path).mkdir(parents=True, exist_ok=True)
 

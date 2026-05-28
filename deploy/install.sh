@@ -3,14 +3,23 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh | sh
 #
-# Optional flags (after `| sh -s --`):
+# Enroll this Pi with a server in one go (env vars, easier to copy-paste):
+#   curl -fsSL https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh \
+#     | SERVER=https://hub.local TOKEN=abc123 NAME=kitchen-pi TIMER=1 sh
+#
+# Or the long form with flags (after `| sh -s --`):
 #   --server URL --name NAME --token TOKEN   enroll this Pi straight away
 #   --timer                                   install + enable the daily backup timer
 set -eu
 
 REPO="https://github.com/kevinmcaleer/pibackup"
 RAW="https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy"
-SERVER=""; NAME=""; TOKEN=""; TIMER=0
+
+# Env-var defaults — flags below still win if both are given.
+SERVER="${SERVER:-}"
+NAME="${NAME:-}"
+TOKEN="${TOKEN:-}"
+TIMER="${TIMER:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -23,6 +32,18 @@ while [ $# -gt 0 ]; do
 done
 
 echo "Installing pibackup…"
+
+# Ensure rsync is available — required for all backup transfers.
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "rsync not found — installing…"
+  if command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+    sudo apt-get install -y rsync
+  else
+    echo "ERROR: rsync is not installed and could not be installed automatically." >&2
+    echo "Please install rsync manually and re-run this script." >&2
+    exit 1
+  fi
+fi
 
 install_with_pipx() {
   pipx install "git+$REPO" 2>/dev/null || pipx upgrade pibackup
@@ -62,7 +83,7 @@ if [ -n "$TOKEN" ] && [ -n "$SERVER" ]; then
   fi
 fi
 
-if [ "$TIMER" -eq 1 ]; then
+if [ "$TIMER" = "1" ] || [ "$TIMER" = "true" ]; then
   echo "Installing the daily backup timer…"
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
