@@ -1,0 +1,25 @@
+# pibackup agent poller (system service). Long-running: polls the server for
+# queued start/stop commands so server-issued jobs take effect without manual
+# intervention. Runs as root so it can read every file (same model as the
+# backup timer). Install: copy this unit to /etc/systemd/system/ then
+# `systemctl enable --now pibackup-agent.service`.
+[Unit]
+Description=pibackup agent poller (acts on server start/stop commands)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h is root's home (/root) for a system service, where root's pibackup lives.
+# --interval 5 polls every 5s; a server-issued `stop` takes effect within one
+# poll (≈5s). Lower it for snappier stops, raise it to lighten server load.
+ExecStart=%h/.local/bin/pibackup agent --interval 5
+# Keep polling across transient network/server hiccups.
+Restart=on-failure
+RestartSec=10
+# Background-friendly: low CPU + idle I/O (the client also nice/ionices rsync).
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

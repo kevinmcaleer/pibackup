@@ -6,11 +6,13 @@
 #
 # Enroll this Pi with a server in one go (env vars, easier to copy-paste):
 #   curl -fsSL https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh \
-#     | sudo SERVER=https://hub.local TOKEN=abc123 NAME=kitchen-pi TIMER=1 sh
+#     | sudo SERVER=https://hub.local TOKEN=abc123 NAME=kitchen-pi TIMER=1 AGENT=1 sh
 #
 # Or the long form with flags (after `| sudo sh -s --`):
 #   --server URL --name NAME --token TOKEN   enroll this Pi straight away
 #   --timer                                   install + enable the daily backup timer
+#   --agent                                   install + enable the agent poller
+#                                             (acts on server start/stop commands)
 set -eu
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -28,6 +30,7 @@ SERVER="${SERVER:-}"
 NAME="${NAME:-}"
 TOKEN="${TOKEN:-}"
 TIMER="${TIMER:-0}"
+AGENT="${AGENT:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -35,6 +38,7 @@ while [ $# -gt 0 ]; do
     --name)   NAME="$2";   shift 2 ;;
     --token)  TOKEN="$2";  shift 2 ;;
     --timer)  TIMER=1;     shift ;;
+    --agent)  AGENT=1;     shift ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -97,6 +101,13 @@ if [ "$TIMER" = "1" ] || [ "$TIMER" = "true" ]; then
   curl -fsSL "$RAW/pibackup-backup.timer"   -o /etc/systemd/system/pibackup-backup.timer
   systemctl daemon-reload
   systemctl enable --now pibackup-backup.timer
+fi
+
+if [ "$AGENT" = "1" ] || [ "$AGENT" = "true" ]; then
+  echo "Installing the agent poller (system service, runs as root)…"
+  curl -fsSL "$RAW/pibackup-agent.service" -o /etc/systemd/system/pibackup-agent.service
+  systemctl daemon-reload
+  systemctl enable --now pibackup-agent.service
 fi
 
 echo "Done. Try: pibackup status"
