@@ -41,7 +41,11 @@ def restore_snapshot(config: Config, snap: dict, target_dir: str) -> RestoreResu
         return _restore_encrypted(dest, path, target)
 
     src = dest.rsync_source(path).rstrip("/") + "/"
-    cmd = build_rsync_command(src, str(target).rstrip("/") + "/", compress=True, rsh=dest.rsh)
+    # No default excludes on restore: the snapshot must come back verbatim, and a
+    # stored path that matches a backup-time exclude (e.g. /tmp) would be dropped.
+    cmd = build_rsync_command(
+        src, str(target).rstrip("/") + "/", compress=True, rsh=dest.rsh, default_excludes=False
+    )
     result = run_rsync(cmd)
     msg = f"restored {result.files_transferred} file(s)" if result.ok else result.message
     return RestoreResult(result.ok, str(target), msg)

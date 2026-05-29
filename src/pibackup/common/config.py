@@ -46,6 +46,13 @@ def config_file() -> Path:
     return config_dir() / "config.toml"
 
 
+def default_server_url() -> str:
+    """The server URL when config.toml doesn't set one. Overridable via
+    ``PIBACKUP_SERVER_URL`` (mirrors ``PIBACKUP_DATA_DIR``) so tests and
+    alternate deployments can point elsewhere without writing a config file."""
+    return os.environ.get("PIBACKUP_SERVER_URL", "http://127.0.0.1:8765")
+
+
 def ssh_key_path() -> Path:
     """The SSH identity generated at enrollment, used for rsync-over-SSH."""
     return config_dir() / "ssh" / "id_ed25519"
@@ -91,7 +98,7 @@ def load_config() -> Config:
         data_dir=ddir,
         repo_dir=Path(overrides.get("repo_dir", ddir / "repo")),
         db_path=Path(overrides.get("db_path", ddir / "pibackup.db")),
-        server_url=overrides.get("server_url", "http://127.0.0.1:8765"),
+        server_url=overrides.get("server_url", default_server_url()),
         repo_target=overrides.get("repo_target"),
         recipient=overrides.get("recipient"),
         authorized_keys=overrides.get("authorized_keys"),
