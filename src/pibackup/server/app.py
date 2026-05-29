@@ -249,6 +249,50 @@ def create_app(config: Optional[Config] = None):
         store.delete_job(job_id)
         return {"deleted": job_id}
 
+    # ---- jobs: web form handlers (session-authed, used by the dashboard) ----
+    @api.post("/jobs")
+    def web_create_job(
+        request: Request,
+        client: str = Form(""),
+        name: str = Form(""),
+        sources: str = Form(""),
+        retention_days: int = Form(30),
+        bwlimit_kbps: int = Form(0),
+        encrypted: str = Form(""),
+    ):
+        """Create a job for any enrolled client from the dashboard form."""
+        if not _logged_in(request):
+            return RedirectResponse("/login", status_code=303)
+        src_list = [s.strip() for s in sources.split(",") if s.strip()]
+        error = None
+        if not client or store.get_client_by_name(client) is None:
+            error = f"Unknown client: {client or '(none)'}"
+        elif not name.strip():
+            error = "Job name is required."
+        elif not src_list:
+            error = "At least one source path is required."
+        if error:
+            return HTMLResponse(render_dashboard(store, newjob_error=error), status_code=400)
+        cid = _require_client(client)
+        spec = JobSpec(
+            name=name.strip(),
+            sources=src_list,
+            retention_days=retention_days,
+            bwlimit_kbps=bwlimit_kbps,
+            encrypted=bool(encrypted),
+        )
+        store.ensure_job(cid, spec)
+        return RedirectResponse("/", status_code=303)
+
+    @api.post("/jobs/{job_id}/delete")
+    def web_delete_job(job_id: int, request: Request):
+        """Delete a job from the dashboard (HTML forms can't send DELETE)."""
+        if not _logged_in(request):
+            return RedirectResponse("/login", status_code=303)
+        if store.get_job(job_id) is not None:
+            store.delete_job(job_id)
+        return RedirectResponse("/", status_code=303)
+
     # ---- commands (start/stop a job remotely) ----
     def _enqueue(job_id: int, action: str) -> dict:
         if store.get_job(job_id) is None:

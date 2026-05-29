@@ -67,6 +67,21 @@ _DASHBOARD = """<!doctype html>
   .btn { font:inherit; font-size:13px; font-weight:600; padding:4px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
   .btn.start { background:var(--ok); color:#fff; border-color:var(--ok); }
   .btn.stop { background:var(--fail); color:#fff; border-color:var(--fail); }
+  .btn.del { background:#fff; color:var(--fail); border-color:var(--border); }
+  /* New-job form */
+  details.newjob { margin:8px 0 18px; }
+  details.newjob > summary { cursor:pointer; font-size:14px; font-weight:600; color:#0969da; list-style:none; }
+  details.newjob > summary::-webkit-details-marker { display:none; }
+  .jobform { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px 20px; margin-top:10px;
+             display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px 16px; align-items:end; }
+  .jobform .field { display:flex; flex-direction:column; gap:4px; }
+  .jobform label { font-size:13px; color:var(--muted); }
+  .jobform input, .jobform select { padding:7px 9px; border:1px solid var(--border); border-radius:6px; font:inherit; font-size:14px; }
+  .jobform .checkbox { flex-direction:row; align-items:center; gap:6px; }
+  .jobform .checkbox input { width:auto; }
+  .jobform .submit { grid-column:1 / -1; }
+  .btn.create { background:var(--ok); color:#fff; border-color:var(--ok); }
+  .jobform .err { grid-column:1 / -1; color:var(--fail); font-size:13px; margin:0; }
 </style>
 </head>
 <body>
@@ -99,6 +114,40 @@ _DASHBOARD = """<!doctype html>
   </div>
 
   <h2>Backup jobs</h2>
+  <details class="newjob"{% if newjob_error %} open{% endif %}>
+    <summary>+ New job</summary>
+    <form class="jobform" method="post" action="/jobs">
+      {% if newjob_error %}<p class="err">{{ newjob_error }}</p>{% endif %}
+      <div class="field">
+        <label for="nj-client">Pi</label>
+        <select id="nj-client" name="client" required>
+          {% if not clients %}<option value="">No enrolled clients</option>{% endif %}
+          {% for c in clients %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="nj-name">Job name</label>
+        <input id="nj-name" name="name" placeholder="documents" required>
+      </div>
+      <div class="field">
+        <label for="nj-sources">Sources (comma-separated)</label>
+        <input id="nj-sources" name="sources" placeholder="/home, /etc" required>
+      </div>
+      <div class="field">
+        <label for="nj-retention">Retention (days)</label>
+        <input id="nj-retention" name="retention_days" type="number" min="1" value="30">
+      </div>
+      <div class="field">
+        <label for="nj-bwlimit">Bandwidth limit (KB/s, 0 = none)</label>
+        <input id="nj-bwlimit" name="bwlimit_kbps" type="number" min="0" value="0">
+      </div>
+      <div class="field checkbox">
+        <input id="nj-encrypted" name="encrypted" type="checkbox" value="1">
+        <label for="nj-encrypted">Encrypted</label>
+      </div>
+      <div class="submit"><button class="btn create" type="submit">Create job</button></div>
+    </form>
+  </details>
   {% if jobs %}
   <table>
     <thead><tr><th>Pi</th><th>Job</th><th>Sources</th><th>Retention</th><th>Encrypted</th><th>Last run</th><th>Status</th><th>Snapshots</th><th>Actions</th></tr></thead>
@@ -118,6 +167,7 @@ _DASHBOARD = """<!doctype html>
           <form class="act" method="post" action="/jobs/{{ j.id }}/stop"><button class="btn stop" type="submit">Stop</button></form>
           {% else %}
           <form class="act" method="post" action="/jobs/{{ j.id }}/start"><button class="btn start" type="submit">Start</button></form>
+          <form class="act" method="post" action="/jobs/{{ j.id }}/delete" onsubmit="return confirm('Delete job {{ j.name }} on {{ j.client }}?');"><button class="btn del" type="submit">Delete</button></form>
           {% endif %}
         </td>
       </tr>
@@ -247,7 +297,7 @@ def _human_bytes(n: int) -> str:
     return f"{size:.1f} TB"
 
 
-def render_dashboard(store: Store) -> str:
+def render_dashboard(store: Store, newjob_error: str | None = None) -> str:
     clients = store.list_clients()
     jobs = store.list_jobs()
     runs = store.list_runs(200)
@@ -297,4 +347,5 @@ def render_dashboard(store: Store) -> str:
     return _env.get_template("dashboard.html").render(
         version=__version__, jobs=job_rows, runs=runs[:20], totals=totals,
         running=running, refresh=refresh,
+        clients=[c["name"] for c in clients], newjob_error=newjob_error,
     )
