@@ -558,6 +558,46 @@ def admin_show():
     _detail("Administrator", {"username": admin["username"], "updated_at": admin["updated_at"]})
 
 
+def _execute_plan(plan, *, dry_run: bool) -> None:
+    """Run (or, for --dry-run, print) a provisioning plan. Shared by the
+    `admin enable-group` and `admin install-service` commands."""
+    import os
+    import subprocess
+
+    if dry_run:
+        console.print("[dim]--dry-run, would run:[/]")
+        console.print(plan.as_shell())
+        console.print()
+        for note in plan.notes:
+            console.print(f"[cyan]•[/] {note}")
+        return
+
+    if os.geteuid() != 0:
+        console.print(
+            "[red]Must run as root[/] (it edits users/groups, /etc and /var). "
+            "Re-run with [bold]sudo[/]."
+        )
+        raise typer.Exit(1)
+
+    for cmd in plan.commands:
+        try:
+            subprocess.run(cmd, check=True)
+        except FileNotFoundError:
+            console.print(f"[red]Command not found:[/] {cmd[0]}. Is it on PATH?")
+            raise typer.Exit(1)
+        except subprocess.CalledProcessError as exc:
+            console.print(f"[red]Step failed[/] (exit {exc.returncode}): {' '.join(cmd)}")
+            raise typer.Exit(1)
+
+    for path, body in plan.all_files():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+        console.print(f"[green]Wrote[/] {path}")
+    console.print()
+    for note in plan.notes:
+        console.print(f"[cyan]•[/] {note}")
+
+
 @admin_app.command("enable-group")
 def admin_enable_group(
     operator: Optional[str] = typer.Argument(
@@ -579,7 +619,6 @@ def admin_enable_group(
     themselves — no `sudo -u pibackup -H /full/path`. Must run as root.
     """
     import os
-    import subprocess
 
     from pibackup.server.provision import build_plan
 
@@ -587,37 +626,56 @@ def admin_enable_group(
         operator = os.environ.get("SUDO_USER") or None
 
     plan = build_plan(operator, service_user)
+    _execute_plan(plan, dry_run=dry_run)
 
-    if dry_run:
-        console.print("[dim]--dry-run, would run:[/]")
-        console.print(plan.as_shell())
-        console.print()
-        for note in plan.notes:
-            console.print(f"[cyan]•[/] {note}")
-        return
 
-    if os.geteuid() != 0:
-        console.print(
-            "[red]Must run as root[/] (it edits groups and /etc). "
-            "Re-run with [bold]sudo[/]."
-        )
-        raise typer.Exit(1)
+@admin_app.command("install-service")
+def admin_install_service(
+    service_user: str = typer.Option(
+        "pibackup", "--service-user", help="The system user the daemon runs as."
+    ),
+    binary: str = typer.Option(
+        "/usr/local/bin/pibackup", "--binary",
+        help="Path the systemd unit calls (install.sh symlinks this).",
+    ),
+    migrate_from: Optional[str] = typer.Option(
+        None, "--migrate-from",
+        help="Copy an existing state dir (e.g. a prior --user install's "
+        "~/.local/share/pibackup) into /var/lib/pibackup before starting.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would happen, change nothing."
+    ),
+):
+    """Install + start the server as a robust systemd *system* service (#36).
 
-    for cmd in plan.commands:
+    Creates the `pibackup` system user/group, provisions the shared state dir
+    (/var/lib/pibackup), writes /etc/systemd/system/pibackup-server.service, and
+    enables + starts it — no linger, no session bus. Manage it afterwards with
+    plain `sudo systemctl restart pibackup-server`. Must run as root.
+    """
+    import os
+    import pwd
+    from pathlib import Path
+
+    from pibackup.server.provision import build_service_plan
+
+    # Skip the useradd step if the service user already exists (idempotent).
+    create_user = True
+    if not dry_run:
         try:
-            subprocess.run(cmd, check=True)
-        except FileNotFoundError:
-            console.print(f"[red]Command not found:[/] {cmd[0]}. Is it on PATH?")
-            raise typer.Exit(1)
-        except subprocess.CalledProcessError as exc:
-            console.print(f"[red]Step failed[/] (exit {exc.returncode}): {' '.join(cmd)}")
-            raise typer.Exit(1)
+            pwd.getpwnam(service_user)
+            create_user = False
+        except KeyError:
+            create_user = True
 
-    plan.config_path.write_text(plan.config_body)
-    console.print(f"[green]Wrote[/] {plan.config_path}")
-    console.print()
-    for note in plan.notes:
-        console.print(f"[cyan]•[/] {note}")
+    plan = build_service_plan(
+        binary=binary,
+        service_user=service_user,
+        migrate_from=Path(migrate_from) if migrate_from else None,
+        create_user=create_user,
+    )
+    _execute_plan(plan, dry_run=dry_run)
 
 
 # ===== top-level shortcuts =====
