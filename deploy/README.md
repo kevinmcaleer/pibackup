@@ -5,10 +5,17 @@
 On the host that stores backups:
 
 ```bash
-pipx install git+https://github.com/kevinmcaleer/pibackup
+# The [server] extra pulls fastapi/uvicorn/jinja2/python-multipart (API + dashboard).
+pipx install "pibackup[server] @ git+https://github.com/kevinmcaleer/pibackup"
 cp deploy/pibackup-server.service ~/.config/systemd/user/
 loginctl enable-linger "$USER"          # start at boot without a login
 systemctl --user enable --now pibackup-server
+```
+
+The dashboard is locked until an administrator is set. Create one on the server:
+
+```bash
+pibackup admin set-password             # prompts for username + password
 ```
 
 Set a client-facing `repo_target` (and optionally `authorized_keys`) in

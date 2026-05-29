@@ -57,8 +57,12 @@ if ! command -v rsync >/dev/null 2>&1; then
   fi
 fi
 
+# The [crypto] extra (pyrage + zstandard) lets this client run encrypted jobs
+# and restore encrypted snapshots; harmless for plaintext-only clients.
+SPEC="pibackup[crypto] @ git+$REPO"
+
 install_with_pipx() {
-  pipx install "git+$REPO" 2>/dev/null || pipx upgrade pibackup
+  pipx install "$SPEC" 2>/dev/null || pipx upgrade pibackup
 }
 
 install_with_venv() {
@@ -67,7 +71,7 @@ install_with_venv() {
   venv="$HOME/.local/share/pibackup/venv"
   python3 -m venv "$venv"
   "$venv/bin/pip" install --quiet --upgrade pip
-  "$venv/bin/pip" install "git+$REPO"
+  "$venv/bin/pip" install "$SPEC"
   mkdir -p "$HOME/.local/bin"
   ln -sf "$venv/bin/pibackup" "$HOME/.local/bin/pibackup"
 }
