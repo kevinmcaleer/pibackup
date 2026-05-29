@@ -48,6 +48,21 @@ class RunIn(BaseModel):
     encrypted: bool = False
 
 
+class RunPatch(BaseModel):
+    # progress tick (status omitted) ...
+    percent: Optional[float] = None
+    transferred: Optional[int] = None
+    rate: Optional[str] = None
+    eta: Optional[str] = None
+    # ... or a terminal result (status = success|failure)
+    status: Optional[str] = None
+    bytes_transferred: int = 0
+    message: str = ""
+    snapshot_path: Optional[str] = None
+    snapshot_size: int = 0
+    encrypted: bool = False
+
+
 class EnrollIn(BaseModel):
     name: str
     token: str
@@ -176,10 +191,25 @@ def create_app(config: Optional[Config] = None):
         return {"deleted": job_id}
 
     # ---- runs + snapshots ----
+    def _finalize_run(run_id: int, job_id: int, status: str, bytes_transferred: int,
+                      message: str, snapshot_path: Optional[str], snapshot_size: int,
+                      encrypted: bool) -> dict:
+        store.finish_run(run_id, status, bytes_transferred, message)
+        snapshot_id = None
+        if status == "success" and snapshot_path:
+            snapshot_id = store.add_snapshot(job_id, run_id, snapshot_path, snapshot_size, encrypted)
+        # Server owns retention: prune this job's expired snapshots now.
+        pruned = retention.prune_job(store, job_id, repo_root)
+        return {"run_id": run_id, "snapshot_id": snapshot_id, "pruned": len(pruned)}
+
     @api.post("/jobs/{job_id}/runs")
     def report_run(job_id: int, body: RunIn):
         if store.get_job(job_id) is None:
             raise HTTPException(404, f"unknown job: {job_id}")
+        # status='running' opens a live run the client streams progress into;
+        # any terminal status records a completed run in one shot (legacy path).
+        if body.status == "running":
+            return {"run_id": store.start_run(job_id)}
         run_id = store.record_run(
             job_id, body.status, body.bytes_transferred, body.message,
             body.started_at, body.finished_at,
@@ -189,9 +219,21 @@ def create_app(config: Optional[Config] = None):
             snapshot_id = store.add_snapshot(
                 job_id, run_id, body.snapshot_path, body.snapshot_size, body.encrypted,
             )
-        # Server owns retention: prune this job's expired snapshots now.
         pruned = retention.prune_job(store, job_id, repo_root)
         return {"run_id": run_id, "snapshot_id": snapshot_id, "pruned": len(pruned)}
+
+    @api.patch("/runs/{run_id}")
+    def patch_run(run_id: int, body: RunPatch):
+        run = store.get_run(run_id)
+        if run is None:
+            raise HTTPException(404, f"unknown run: {run_id}")
+        if body.status in ("success", "failure"):
+            return _finalize_run(
+                run_id, run["job_id"], body.status, body.bytes_transferred, body.message,
+                body.snapshot_path, body.snapshot_size, body.encrypted,
+            )
+        store.update_progress(run_id, body.percent or 0, body.transferred or 0, body.rate, body.eta)
+        return {"run_id": run_id}
 
     @api.get("/runs")
     def list_runs(limit: int = 50):

@@ -9,18 +9,23 @@ from injecting markup.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from jinja2 import Environment, DictLoader, select_autoescape
 
 from pibackup import __version__
 from pibackup.common.store import Store
 
+# A running job whose progress hasn't updated in this long is treated as stalled
+# (e.g. the client was killed mid-run), so it doesn't sit "running" forever.
+STALL_AFTER_SECONDS = 120
+
 _DASHBOARD = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="30">
+<meta http-equiv="refresh" content="{{ refresh }}">
 <title>pibackup</title>
 <style>
   :root { --ok:#1a7f37; --fail:#cf222e; --muted:#57606a; --bg:#f6f8fa; --card:#fff; --border:#d0d7de; }
@@ -46,11 +51,35 @@ _DASHBOARD = """<!doctype html>
   .muted { color:var(--muted); }
   .empty { color:var(--muted); padding:16px; background:var(--card); border:1px solid var(--border); border-radius:8px; }
   code { background:#eaeef2; padding:1px 5px; border-radius:4px; }
+  .running-card { background:var(--card); border:1px solid var(--border); border-left:4px solid var(--ok); border-radius:8px; padding:14px 18px; margin-bottom:10px; }
+  .running-card.stalled { border-left-color:var(--fail); }
+  .run-head { display:flex; justify-content:space-between; align-items:baseline; font-size:14px; margin-bottom:8px; }
+  .run-head .who { font-weight:600; }
+  .run-head .meta { color:var(--muted); font-size:13px; }
+  .bar { height:10px; background:#eaeef2; border-radius:6px; overflow:hidden; }
+  .bar .fill { height:100%; background:var(--ok); transition:width .5s; }
+  .stalled .bar .fill { background:var(--fail); }
 </style>
 </head>
 <body>
 <header><h1>&#128451;&#65039; pibackup</h1><span class="ver">v{{ version }}</span></header>
 <main>
+  {% if running %}
+  <h2>Running now</h2>
+  {% for r in running %}
+    <div class="running-card {{ 'stalled' if r.stalled }}">
+      <div class="run-head">
+        <span class="who">{{ r.client }} / {{ r.job }}</span>
+        <span class="meta">
+          {% if r.stalled %}<span class="badge failure">stalled</span>{% endif %}
+          {{ r.percent }}%{% if r.rate %} · {{ r.rate }}{% endif %}{% if r.eta and not r.stalled %} · ETA {{ r.eta }}{% endif %}
+        </span>
+      </div>
+      <div class="bar"><div class="fill" style="width: {{ r.percent }}%"></div></div>
+    </div>
+  {% endfor %}
+  {% endif %}
+
   <div class="cards">
     <div class="card"><div class="n">{{ totals.clients }}</div><div class="l">Pis</div></div>
     <div class="card"><div class="n">{{ totals.jobs }}</div><div class="l">Jobs</div></div>
@@ -112,6 +141,36 @@ _env = Environment(
 )
 
 
+def _age_seconds(ts: str | None) -> float | None:
+    """Seconds since a stored UTC timestamp ('YYYY-MM-DD HH:MM:SS'), or None."""
+    if not ts:
+        return None
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return (datetime.now(timezone.utc) - dt).total_seconds()
+
+
+def _running_rows(runs: list[dict]) -> list[dict]:
+    rows = []
+    for run in runs:
+        if run["status"] != "running":
+            continue
+        age = _age_seconds(run.get("updated_at") or run.get("started_at"))
+        rows.append(
+            {
+                "client": run.get("client_name"),
+                "job": run["job_name"],
+                "percent": int(run.get("percent") or 0),
+                "rate": run.get("rate"),
+                "eta": run.get("eta"),
+                "stalled": age is not None and age > STALL_AFTER_SECONDS,
+            }
+        )
+    return rows
+
+
 def _human_bytes(n: int) -> str:
     size = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -159,6 +218,11 @@ def render_dashboard(store: Store) -> str:
         "bytes_h": _human_bytes(sum(s["size_bytes"] for s in snaps)),
     }
 
+    running = _running_rows(store.running_runs())  # carries client name + progress
+    # Poll quickly while something is actively running, otherwise stay calm.
+    refresh = 3 if any(not r["stalled"] for r in running) else 30
+
     return _env.get_template("dashboard.html").render(
-        version=__version__, jobs=job_rows, runs=runs[:20], totals=totals
+        version=__version__, jobs=job_rows, runs=runs[:20], totals=totals,
+        running=running, refresh=refresh,
     )
