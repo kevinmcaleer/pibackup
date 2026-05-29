@@ -67,6 +67,24 @@ def test_detect_unknown_for_non_venv(tmp_path):
     assert info.command == []
 
 
+def test_detect_pipx_when_python_is_symlink_to_base_interpreter(tmp_path):
+    """Regression: a real pipx venv's bin/python is a *symlink* to the base
+    interpreter (e.g. /usr/bin/python3.13). Detection must not follow that
+    symlink out of the venv — doing so missed pyvenv.cfg and wrongly reported
+    'unknown', which broke `pibackup update` on every pipx install."""
+    root, python = _make_venv(tmp_path, name="pibackup", parent="venvs")
+    # Make bin/python a symlink pointing outside the venv (the real pipx layout).
+    base = tmp_path / "usr" / "bin" / "python3.13"
+    base.parent.mkdir(parents=True)
+    base.write_text("")
+    python.symlink_to(base)
+
+    info = update_mod.detect_install(executable=str(python))
+    assert info.method == "pipx"
+    assert info.command == ["pipx", "upgrade", "pibackup"]
+    assert info.new_binary == root / "bin" / "pibackup"
+
+
 # ----- the update command -----
 def _patch_detect(monkeypatch, method, command, new_binary, extras=()):
     info = update_mod.InstallInfo(
