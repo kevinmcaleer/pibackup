@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS enroll_tokens (
     used        INTEGER NOT NULL DEFAULT 0
 );
 
+-- Dashboard administrator. Single-row table (id is always 1); the password is
+-- stored as a PBKDF2 hash + salt, never in plaintext. session_secret signs the
+-- login cookie and is rotated on every password change.
+CREATE TABLE IF NOT EXISTS admin (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    username       TEXT NOT NULL,
+    password_hash  TEXT NOT NULL,
+    salt           TEXT NOT NULL,
+    iterations     INTEGER NOT NULL,
+    session_secret TEXT NOT NULL,
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_client    ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS idx_runs_job       ON runs(job_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status    ON runs(status);

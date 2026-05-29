@@ -34,6 +34,10 @@ _DASHBOARD = """<!doctype html>
   header { background:#24292f; color:#fff; padding:16px 24px; display:flex; align-items:baseline; gap:12px; }
   header h1 { font-size:18px; margin:0; }
   header .ver { color:#9da7b1; font-size:13px; }
+  header .spacer { flex:1; }
+  header form { margin:0; }
+  header .logout { background:none; border:1px solid #444c56; color:#c9d1d9; font-size:13px;
+                   padding:4px 10px; border-radius:6px; cursor:pointer; }
   main { padding:24px; max-width:1100px; margin:0 auto; }
   .cards { display:flex; gap:16px; flex-wrap:wrap; margin-bottom:8px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px 20px; min-width:120px; }
@@ -62,7 +66,10 @@ _DASHBOARD = """<!doctype html>
 </style>
 </head>
 <body>
-<header><h1>&#128451;&#65039; pibackup</h1><span class="ver">v{{ version }}</span></header>
+<header><h1>&#128451;&#65039; pibackup</h1><span class="ver">v{{ version }}</span>
+  <span class="spacer"></span>
+  <form method="post" action="/logout"><button class="logout" type="submit">Sign out</button></form>
+</header>
 <main>
   {% if running %}
   <h2>Running now</h2>
@@ -135,10 +142,59 @@ _DASHBOARD = """<!doctype html>
 </html>
 """
 
+_LOGIN = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pibackup — sign in</title>
+<style>
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+         background:#f6f8fa; color:#1f2328; display:flex; min-height:100vh;
+         align-items:center; justify-content:center; }
+  .login { background:#fff; border:1px solid #d0d7de; border-radius:8px;
+           padding:28px 32px; width:320px; }
+  .login h1 { font-size:18px; margin:0 0 4px; }
+  .login .sub { color:#57606a; font-size:13px; margin:0 0 20px; }
+  label { display:block; font-size:13px; color:#57606a; margin:12px 0 4px; }
+  input { width:100%; padding:8px 10px; border:1px solid #d0d7de; border-radius:6px;
+          font-size:14px; }
+  button { width:100%; margin-top:18px; padding:9px; border:0; border-radius:6px;
+           background:#24292f; color:#fff; font-size:14px; font-weight:600; cursor:pointer; }
+  .err { color:#cf222e; font-size:13px; margin-top:14px; }
+  .hint { color:#57606a; font-size:12px; margin-top:16px; }
+  code { background:#eaeef2; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+  <form class="login" method="post" action="/login">
+    <h1>&#128451;&#65039; pibackup</h1>
+    <p class="sub">Sign in to the dashboard</p>
+    {% if needs_setup %}
+    <p class="hint">No administrator configured yet. On the server, set one with
+      <code>pibackup admin set-password</code>.</p>
+    {% else %}
+    <label for="username">Username</label>
+    <input id="username" name="username" autofocus autocomplete="username">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    {% endif %}
+  </form>
+</body>
+</html>
+"""
+
 _env = Environment(
-    loader=DictLoader({"dashboard.html": _DASHBOARD}),
+    loader=DictLoader({"dashboard.html": _DASHBOARD, "login.html": _LOGIN}),
     autoescape=select_autoescape(["html"]),
 )
+
+
+def render_login(error: str | None = None, needs_setup: bool = False) -> str:
+    """The sign-in page; ``needs_setup`` flips it to a 'no admin yet' notice."""
+    return _env.get_template("login.html").render(error=error, needs_setup=needs_setup)
 
 
 def _age_seconds(ts: str | None) -> float | None:

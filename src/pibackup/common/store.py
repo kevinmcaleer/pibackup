@@ -183,6 +183,39 @@ class Store:
         finally:
             conn.close()
 
+    # -- admin (dashboard login) --
+    def get_admin(self) -> Optional[dict]:
+        """The single admin row, or None if no administrator is configured yet."""
+        rows = self._query("SELECT * FROM admin WHERE id = 1")
+        return rows[0] if rows else None
+
+    def has_admin(self) -> bool:
+        return self.get_admin() is not None
+
+    def set_admin(
+        self, username: str, password_hash: str, salt: str, iterations: int, session_secret: str
+    ) -> None:
+        """Create or replace the dashboard administrator (rotates the session secret)."""
+        self.ensure_schema()
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """INSERT INTO admin (id, username, password_hash, salt, iterations,
+                                      session_secret, updated_at)
+                   VALUES (1, ?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(id) DO UPDATE SET
+                     username=excluded.username,
+                     password_hash=excluded.password_hash,
+                     salt=excluded.salt,
+                     iterations=excluded.iterations,
+                     session_secret=excluded.session_secret,
+                     updated_at=datetime('now')""",
+                (username, password_hash, salt, iterations, session_secret),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def ensure_job(self, client_id: int, spec: JobSpec) -> int:
         conn = connect(self.db_path)
         try:

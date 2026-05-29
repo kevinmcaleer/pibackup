@@ -35,11 +35,13 @@ job_app = typer.Typer(help="Manage backup jobs.", no_args_is_help=True)
 snapshot_app = typer.Typer(help="Manage stored snapshots.", no_args_is_help=True)
 client_app = typer.Typer(help="Manage registered Raspberry Pis (server view).", no_args_is_help=True)
 key_app = typer.Typer(help="Manage age encryption keys.", no_args_is_help=True)
+admin_app = typer.Typer(help="Manage the dashboard administrator (server).", no_args_is_help=True)
 
 app.add_typer(job_app, name="job")
 app.add_typer(snapshot_app, name="snapshot")
 app.add_typer(client_app, name="client")
 app.add_typer(key_app, name="key")
+app.add_typer(admin_app, name="admin")
 
 
 class OutputFormat(str, Enum):
@@ -390,6 +392,65 @@ def key_rm(key: str = typer.Argument(..., help="Key name.")):
         console.print(f"[red]No such key:[/] {key}")
         raise typer.Exit(1)
     console.print(f"[green]Removed key[/] {key}.")
+
+
+# ===== admin (dashboard login) =====
+def _admin_store():
+    """Open the server's local store for admin-credential management."""
+    from pibackup.common.config import load_config
+    from pibackup.common.store import Store
+
+    return Store(load_config().db_path)
+
+
+@admin_app.command("set-password")
+def admin_set_password(
+    username: str = typer.Option("admin", "--username", "-u", help="Administrator username."),
+    password: Optional[str] = typer.Option(
+        None, "--password", "-p", help="New password (prompted securely if omitted)."
+    ),
+):
+    """Set or reset the dashboard administrator's username and password."""
+    import secrets
+
+    from pibackup.common.auth import hash_password
+
+    if password is None:
+        password = typer.prompt("New password", hide_input=True, confirmation_prompt=True)
+    if not password:
+        console.print("[red]Password must not be empty.[/]")
+        raise typer.Exit(1)
+
+    ph = hash_password(password)
+    store = _admin_store()
+    existed = store.has_admin()
+    # A fresh signing secret invalidates any existing dashboard sessions.
+    store.set_admin(username, ph.hash, ph.salt, ph.iterations, secrets.token_urlsafe(32))
+    verb = "Reset" if existed else "Created"
+    console.print(f"[green]{verb} administrator[/] [bold]{username}[/] for the dashboard.")
+    console.print("[dim]Existing dashboard sessions have been signed out.[/]")
+
+
+@admin_app.command("reset")
+def admin_reset(
+    username: str = typer.Option("admin", "--username", "-u", help="Administrator username."),
+    password: Optional[str] = typer.Option(
+        None, "--password", "-p", help="New password (prompted securely if omitted)."
+    ),
+):
+    """Alias for `admin set-password` — reset the dashboard credentials."""
+    admin_set_password(username=username, password=password)
+
+
+@admin_app.command("show")
+def admin_show():
+    """Show whether a dashboard administrator is configured."""
+    store = _admin_store()
+    admin = store.get_admin()
+    if admin is None:
+        console.print("[yellow]No administrator configured.[/] Set one: pibackup admin set-password")
+        raise typer.Exit(1)
+    _detail("Administrator", {"username": admin["username"], "updated_at": admin["updated_at"]})
 
 
 # ===== top-level shortcuts =====
