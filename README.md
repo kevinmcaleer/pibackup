@@ -33,6 +33,19 @@ pibackup serve                              # API + dashboard on http://127.0.0.
 Open `http://server:8765/` for the dashboard: per-Pi jobs, last-run status, and
 recent runs, auto-refreshing every 30s.
 
+The dashboard is protected by an administrator login. There is no default
+account — until you set one the dashboard stays locked and points you here:
+
+```bash
+pibackup admin set-password                 # prompts for a username/password
+pibackup admin set-password -u admin -p ...  # or pass them non-interactively
+pibackup admin reset                         # same thing; re-run to change them
+```
+
+Credentials are stored hashed (PBKDF2-HMAC-SHA256 + a random salt) in the
+server's SQLite db; the login cookie is HMAC-signed, and resetting the password
+signs out every existing session.
+
 ### Add a new Pi (enrollment)
 
 On the server, mint a token; it prints a one-line bootstrap:
@@ -130,6 +143,7 @@ pibackup snapshot ls       # list stored snapshots
 pibackup restore ID        # restore a snapshot
 pibackup tui               # terminal UI
 pibackup serve             # run the server (API + dashboard)
+pibackup admin set-password # set/reset the dashboard login (server)
 ```
 
 Every `ls` supports `--format json` and `-q/--quiet`, like Docker.

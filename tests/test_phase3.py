@@ -3,7 +3,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from pibackup.common.auth import hash_password
 from pibackup.common.config import Config
+from pibackup.common.store import Store
 from pibackup.server.app import create_app
 from pibackup.server.dashboard import _human_bytes
 
@@ -20,7 +22,15 @@ def _config(tmp_path) -> Config:
 
 @pytest.fixture
 def client(tmp_path):
-    return TestClient(create_app(_config(tmp_path)))
+    # The dashboard is behind the admin login (issue #20), so configure an
+    # administrator and sign in before exercising the protected pages.
+    cfg = _config(tmp_path)
+    store = Store(cfg.db_path)
+    ph = hash_password("secret")
+    store.set_admin("admin", ph.hash, ph.salt, ph.iterations, "sign-secret")
+    c = TestClient(create_app(cfg))
+    c.post("/login", data={"username": "admin", "password": "secret"})
+    return c
 
 
 def test_human_bytes():

@@ -11,14 +11,19 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from fastapi import Request
 from pydantic import BaseModel
 
 from pibackup import __version__
 from pibackup.common.config import Config, JobSpec, load_config
 from pibackup.common.db import init_db
+from pibackup.common.auth import verify_session
 from pibackup.common.store import Store
 from pibackup.server import retention
-from pibackup.server.dashboard import render_dashboard
+from pibackup.server.dashboard import render_dashboard, render_login
+
+# Name of the signed cookie that carries the dashboard login session.
+SESSION_COOKIE = "pibackup_session"
 
 
 # Request models live at module level so FastAPI can resolve them even with
@@ -101,8 +106,8 @@ def _job_out(row: dict) -> dict:
 
 
 def create_app(config: Optional[Config] = None):
-    from fastapi import FastAPI, HTTPException
-    from fastapi.responses import HTMLResponse
+    from fastapi import FastAPI, Form, HTTPException
+    from fastapi.responses import HTMLResponse, RedirectResponse
 
     cfg = config or load_config()
     init_db(cfg.db_path)
@@ -117,14 +122,61 @@ def create_app(config: Optional[Config] = None):
             raise HTTPException(404, f"unknown client: {name}")
         return int(client["id"])
 
+    def _logged_in(request: Request) -> bool:
+        """True if the request carries a valid session cookie for the admin.
+
+        With no administrator configured the dashboard stays locked (the login
+        page tells the operator to set one with `pibackup admin set-password`).
+        """
+        admin = store.get_admin()
+        if admin is None:
+            return False
+        token = request.cookies.get(SESSION_COOKIE, "")
+        username = verify_session(token, admin["session_secret"])
+        return username == admin["username"]
+
     # ---- meta ----
     @api.get("/health")
     def health():
         return {"status": "ok"}
 
+    # ---- dashboard + auth ----
     @api.get("/", response_class=HTMLResponse)
-    def index():
+    def index(request: Request):
+        if not _logged_in(request):
+            return RedirectResponse("/login", status_code=303)
         return render_dashboard(store)
+
+    @api.get("/login", response_class=HTMLResponse)
+    def login_form(request: Request):
+        if _logged_in(request):
+            return RedirectResponse("/", status_code=303)
+        return render_login(needs_setup=not store.has_admin())
+
+    @api.post("/login")
+    def login(username: str = Form(""), password: str = Form("")):
+        from pibackup.common.auth import PasswordHash, sign_session, verify_password
+
+        admin = store.get_admin()
+        if admin is None:
+            return HTMLResponse(render_login(needs_setup=True), status_code=503)
+        stored = PasswordHash(admin["salt"], admin["password_hash"], admin["iterations"])
+        if username != admin["username"] or not verify_password(password, stored):
+            return HTMLResponse(
+                render_login(error="Invalid username or password."), status_code=401
+            )
+        token = sign_session(admin["username"], admin["session_secret"])
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(
+            SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=86400, path="/"
+        )
+        return resp
+
+    @api.post("/logout")
+    def logout():
+        resp = RedirectResponse("/login", status_code=303)
+        resp.delete_cookie(SESSION_COOKIE, path="/")
+        return resp
 
     # ---- enrollment ----
     @api.post("/enroll")
