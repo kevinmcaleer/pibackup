@@ -33,9 +33,14 @@ _DEFAULT_EXCLUDES = [
     "/var/tmp",
 ]
 
+# Exit code we synthesise when a transfer is cancelled on request, so the
+# outcome reads as a clean failure rather than an opaque signal/kill code.
+CANCELLED_EXIT_CODE = 130  # 128 + SIGINT, the conventional "interrupted" code
+
 _EXIT_MEANINGS = {
     23: "partial transfer (some files/attrs could not be transferred)",
     24: "some source files vanished during transfer",
+    130: "cancelled on request",
     255: "SSH/connection error",
 }
 
@@ -201,11 +206,22 @@ def _build_result(returncode: int, output: str) -> RsyncResult:
     )
 
 
+def _terminate(proc: "subprocess.Popen") -> None:
+    """Stop a running rsync: ask politely, then kill if it doesn't exit."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
 def run_rsync(
     cmd: Sequence[str],
     on_progress: Optional["Callable[[Progress], None]"] = None,
     *,
     interval: float = 1.0,
+    should_cancel: Optional["Callable[[], bool]"] = None,
 ) -> RsyncResult:
     """Execute rsync and classify the outcome.
 
@@ -214,16 +230,33 @@ def run_rsync(
     to the callback (throttled to ``interval`` seconds, with a final tick on
     completion). Callback exceptions are swallowed so a flaky progress sink can
     never fail the backup itself.
+
+    ``should_cancel`` (if given) is polled while rsync runs; the first time it
+    returns truthy the subprocess is torn down and the result is reported as a
+    cancelled failure (:data:`CANCELLED_EXIT_CODE`).
     """
     if on_progress is None:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        return _build_result(proc.returncode, proc.stdout + proc.stderr)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # Poll for completion so a cancel request can interrupt a quiet transfer.
+        while proc.poll() is None:
+            if should_cancel and should_cancel():
+                _terminate(proc)
+                out = proc.stdout.read() if proc.stdout else ""
+                return _build_result(CANCELLED_EXIT_CODE, out)
+            try:
+                out, _ = proc.communicate(timeout=interval)
+                return _build_result(proc.returncode, out)
+            except subprocess.TimeoutExpired:
+                continue
+        out = proc.stdout.read() if proc.stdout else ""
+        return _build_result(proc.returncode, out)
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert proc.stdout is not None
     chunks: list[str] = []
     line = ""
     last_emit = 0.0
+    last_cancel_check = 0.0
     latest: Optional[Progress] = None
 
     def emit(prog: Progress) -> None:
@@ -246,6 +279,12 @@ def run_rsync(
                 if now - last_emit >= interval:
                     last_emit = now
                     emit(prog)
+                # Check for a cancel request alongside progress (cheap, throttled).
+                if should_cancel and now - last_cancel_check >= interval:
+                    last_cancel_check = now
+                    if should_cancel():
+                        _terminate(proc)
+                        return _build_result(CANCELLED_EXIT_CODE, "".join(chunks))
             line = ""
         else:
             line += ch

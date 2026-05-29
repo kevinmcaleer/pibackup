@@ -78,10 +78,27 @@ CREATE TABLE IF NOT EXISTS admin (
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Commands the server queues for a client's job. Push-based clients have no
+-- daemon, so the server can't reach out directly: instead it records an intent
+-- ('start' or 'stop') that the client picks up on its next poll and acts on,
+-- updating the status as it goes (pending -> running -> done / failed).
+CREATE TABLE IF NOT EXISTS commands (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id     INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    action     TEXT NOT NULL,                     -- start|stop
+    status     TEXT NOT NULL DEFAULT 'pending',   -- pending|running|done|failed
+    run_id     INTEGER REFERENCES runs(id) ON DELETE SET NULL,
+    message    TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_client    ON jobs(client_id);
 CREATE INDEX IF NOT EXISTS idx_runs_job       ON runs(job_id);
 CREATE INDEX IF NOT EXISTS idx_runs_status    ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_snapshots_job  ON snapshots(job_id);
+CREATE INDEX IF NOT EXISTS idx_commands_job   ON commands(job_id);
+CREATE INDEX IF NOT EXISTS idx_commands_status ON commands(status);
 """
 
 

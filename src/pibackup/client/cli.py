@@ -234,6 +234,55 @@ def job_rm(job: str = typer.Argument(..., help="Job id or name.")):
     console.print(f"[green]Removed job[/] {job}.")
 
 
+@job_app.command("start")
+def job_start(job: str = typer.Argument(..., help="Job id or name.")):
+    """Queue a backup run for a job (the client picks it up and runs it)."""
+    from pibackup.client.api import ApiError
+    from pibackup.common.config import load_config
+
+    server = _server()
+    if not server:
+        console.print(
+            "[red]No server reachable.[/] Starting jobs is a server action — "
+            "run a backup directly with [bold]pibackup run[/] in standalone mode."
+        )
+        raise typer.Exit(1)
+    try:
+        jobs = server.get_jobs(load_config().client_name) or []
+        match = next((j for j in jobs if j["name"] == job or str(j["id"]) == job), None)
+        if not match:
+            console.print(f"[red]No such job:[/] {job}")
+            raise typer.Exit(1)
+        cmd = server.start_job(match["id"])
+    except ApiError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    console.print(f"[green]Queued start[/] for [bold]{match['name']}[/] (command {cmd['id']}).")
+
+
+@job_app.command("stop")
+def job_stop(job: str = typer.Argument(..., help="Job id or name.")):
+    """Queue a stop for a running backup (cancels it on the client)."""
+    from pibackup.client.api import ApiError
+    from pibackup.common.config import load_config
+
+    server = _server()
+    if not server:
+        console.print("[red]No server reachable.[/] Stopping jobs is a server action.")
+        raise typer.Exit(1)
+    try:
+        jobs = server.get_jobs(load_config().client_name) or []
+        match = next((j for j in jobs if j["name"] == job or str(j["id"]) == job), None)
+        if not match:
+            console.print(f"[red]No such job:[/] {job}")
+            raise typer.Exit(1)
+        cmd = server.stop_job(match["id"])
+    except ApiError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    console.print(f"[yellow]Queued stop[/] for [bold]{match['name']}[/] (command {cmd['id']}).")
+
+
 # ===== snapshot =====
 @snapshot_app.command("ls")
 def snapshot_ls(
@@ -684,6 +733,35 @@ def tui():
         )
         raise typer.Exit(1) from exc
     PibackupApp().run()
+
+
+@app.command()
+def agent(
+    once: bool = typer.Option(False, "--once", help="Process the queue once and exit."),
+    interval: float = typer.Option(5.0, "--interval", help="Seconds between polls."),
+):
+    """Poll the server for queued start/stop commands and act on them."""
+    from pibackup.client import agent as agent_mod
+    from pibackup.client.api import ApiError
+
+    server = _server()
+    if not server:
+        console.print("[red]No server reachable.[/] Set server_url or start one with [bold]pibackup serve[/].")
+        raise typer.Exit(1)
+
+    try:
+        if once:
+            for line in agent_mod.poll_once():
+                console.print(f"  [cyan]{line}[/]")
+            console.print("[green]Processed queued commands.[/]")
+            return
+        console.print(f"[green]Agent polling[/] every {interval:g}s — Ctrl-C to stop.")
+        agent_mod.run_agent(interval, on_action=lambda line: console.print(f"  [cyan]{line}[/]"))
+    except KeyboardInterrupt:
+        console.print("\n[dim]Agent stopped.[/]")
+    except ApiError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
 
 
 @app.command()

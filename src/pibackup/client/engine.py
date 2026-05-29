@@ -69,11 +69,11 @@ class BackupEngine:
         key = ssh_key_path()
         self.dest = Destination(config.repo_target, ssh_key=str(key) if key.exists() else None)
 
-    def _rsync(self, cmd: list[str], on_progress=None):
+    def _rsync(self, cmd: list[str], on_progress=None, should_cancel=None):
         """Run rsync, wrapped in nice/ionice when background mode is on."""
         if self.config.background:
             cmd = background_prefix() + cmd
-        return run_rsync(cmd, on_progress)
+        return run_rsync(cmd, on_progress, should_cancel=should_cancel)
 
     def run_job(
         self,
@@ -82,15 +82,16 @@ class BackupEngine:
         dry_run: bool = False,
         recipient: Optional[str] = None,
         on_progress=None,
+        should_cancel=None,
     ) -> JobResult:
         base_sub = f"{self.config.client_name}/{spec.name}"
         self.dest.mkdirs(base_sub)
         if spec.encrypted:
-            return self._run_encrypted(spec, base_sub, recipient, dry_run, on_progress)
-        return self._run_plaintext(spec, base_sub, dry_run, on_progress)
+            return self._run_encrypted(spec, base_sub, recipient, dry_run, on_progress, should_cancel)
+        return self._run_plaintext(spec, base_sub, dry_run, on_progress, should_cancel)
 
     # ----- plaintext: rsync --link-dest snapshots -----
-    def _run_plaintext(self, spec: JobSpec, base_sub: str, dry_run: bool, on_progress=None) -> JobResult:
+    def _run_plaintext(self, spec: JobSpec, base_sub: str, dry_run: bool, on_progress=None, should_cancel=None) -> JobResult:
         existing = sorted(n for n in self.dest.list_dir(base_sub) if n != "latest")
         prev = existing[-1] if existing else None
         link_dest = self.dest.abspath(f"{base_sub}/{prev}") if prev else None
@@ -107,7 +108,7 @@ class BackupEngine:
             relative=True, dry_run=dry_run, rsh=self.dest.rsh, progress=not dry_run,
         )
         started = _now_iso()
-        result = self._rsync(cmd, None if dry_run else on_progress)
+        result = self._rsync(cmd, None if dry_run else on_progress, should_cancel)
         finished = _now_iso()
 
         snapshot = snapshot_path = None
@@ -124,7 +125,8 @@ class BackupEngine:
 
     # ----- encrypted: tar | zstd | age archive -----
     def _run_encrypted(
-        self, spec: JobSpec, base_sub: str, recipient: Optional[str], dry_run: bool, on_progress=None
+        self, spec: JobSpec, base_sub: str, recipient: Optional[str], dry_run: bool,
+        on_progress=None, should_cancel=None,
     ) -> JobResult:
         started = _now_iso()
         archive_name = f"{_timestamp()}{ARCHIVE_SUFFIX}"
@@ -153,7 +155,7 @@ class BackupEngine:
                 compress=False, bwlimit_kbps=spec.bwlimit_kbps or None,
                 rsh=self.dest.rsh, progress=True,
             )
-            result = self._rsync(cmd, on_progress)
+            result = self._rsync(cmd, on_progress, should_cancel)
         finished = _now_iso()
 
         if not result.ok:

@@ -46,6 +46,21 @@ randomised delay, as root). The service runs `pibackup run` under `Nice=19` /
 backups stay out of the way of foreground work. Tune per-job throughput with
 `bwlimit_kbps`.
 
+## On-demand backups from the server
+
+You can start (and stop) a backup from the server — via the dashboard's Start/Stop
+buttons, `pibackup job start NAME` / `pibackup job stop NAME`, or the TUI (`s`/`x`).
+The server queues a command for the client's job; the client acts on it on its next
+poll. Have the client poll with the agent:
+
+```bash
+pibackup agent            # long-running: poll every few seconds
+pibackup agent --once     # drain the queue once (e.g. from a frequent timer)
+```
+
+A `start` runs the job immediately; a `stop` cancels an in-flight run (its rsync
+is torn down and the run is recorded as a cancelled failure).
+
 ## Manual timer install
 
 ```bash

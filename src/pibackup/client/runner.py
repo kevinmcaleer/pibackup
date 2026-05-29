@@ -79,19 +79,28 @@ def run_jobs(
 
     recipient = _resolve_recipient(cfg, specs)
 
+    from pibackup.client import cancel
+
     results: list[JobResult] = []
     for spec in specs:
         run_id = None
         on_progress = None
+        should_cancel = None
         if not dry_run:
             run_id = reporter.start(spec)  # opens a 'running' run for live progress
             if run_id is not None:
                 on_progress = lambda p, rid=run_id: reporter.progress(rid, p)
+            # A pending stop (queued before we even started) cancels immediately;
+            # one issued mid-run is picked up on the next progress tick.
+            cancel.clear_cancel(spec.name)
+            should_cancel = cancel.cancel_checker(spec.name)
 
         res = engine.run_job(
-            spec, dry_run=dry_run, recipient=recipient, on_progress=on_progress
+            spec, dry_run=dry_run, recipient=recipient,
+            on_progress=on_progress, should_cancel=should_cancel,
         )
         if not dry_run:
+            cancel.clear_cancel(spec.name)
             reporter.finish(run_id, spec, res)
         results.append(res)
         if on_result:

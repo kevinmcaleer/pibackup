@@ -22,6 +22,8 @@ class PibackupApp(App):
     """
     BINDINGS = [
         ("r", "run_all", "Run all"),
+        ("s", "start_job", "Start job"),
+        ("x", "stop_job", "Stop job"),
         ("g", "refresh", "Refresh"),
         ("q", "quit", "Quit"),
     ]
@@ -54,6 +56,8 @@ class PibackupApp(App):
             self._status(f"error: {exc}")
             return
 
+        # Keep the last overview so start/stop can map the selected row to a job.
+        self._overview = ov
         jobs = self.query_one("#jobs", DataTable)
         jobs.clear()
         for j in ov["jobs"]:
@@ -82,6 +86,48 @@ class PibackupApp(App):
 
     def action_refresh(self) -> None:
         self.refresh_data()
+
+    def _selected_job(self) -> dict | None:
+        """The job under the cursor in the Jobs table, or None."""
+        ov = getattr(self, "_overview", None)
+        if not ov:
+            return None
+        table = self.query_one("#jobs", DataTable)
+        row = table.cursor_row
+        jobs = ov["jobs"]
+        if row is None or row < 0 or row >= len(jobs):
+            return None
+        return jobs[row]
+
+    def _queue(self, action: str) -> None:
+        """Queue a start/stop command for the selected job (server only)."""
+        ov = getattr(self, "_overview", None)
+        if not ov or not ov.get("server"):
+            self._status("start/stop needs a reachable server")
+            return
+        job = self._selected_job()
+        if not job:
+            self._status("select a job first")
+            return
+        from pibackup.client.api import ApiError, ServerApi
+        from pibackup.common.config import load_config
+
+        api = ServerApi(load_config().server_url)
+        try:
+            if action == "start":
+                api.start_job(job["id"])
+            else:
+                api.stop_job(job["id"])
+        except ApiError as exc:
+            self._status(f"{action} failed: {exc}")
+            return
+        self._status(f"queued {action} for {job['name']}")
+
+    def action_start_job(self) -> None:
+        self._queue("start")
+
+    def action_stop_job(self) -> None:
+        self._queue("stop")
 
     def action_run_all(self) -> None:
         self._status("running backup …")
