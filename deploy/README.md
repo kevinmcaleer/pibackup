@@ -47,6 +47,29 @@ nothing to add to `~/.ssh/config`.
 Run client commands with `sudo` (e.g. `sudo pibackup run`, `sudo pibackup
 status`) so they use root's config and can read everything.
 
+## Upgrading
+
+Once pibackup is installed, upgrade it in place with:
+
+```bash
+pibackup update            # pull the latest, migrate the database
+pibackup update --dry-run  # show what it would do, change nothing
+pibackup update --restart  # also restart any active pibackup services
+```
+
+`update` detects how pibackup was installed and upgrades the right way: a pipx
+install runs `pipx upgrade pibackup` (reusing the recorded spec, so extras like
+`[server]`/`[crypto]` are preserved); the `install.sh` venv fallback re-runs
+`pip install --upgrade` against the same git spec, re-deriving its extras. It
+then re-execs the freshly installed binary to run database migrations (so the
+*new* migration code runs, not the old) and reports the old → new version.
+
+Run it as the user that owns the install: on a server that's the service user
+(`pibackup update`); on a client installed by `install.sh` that's root
+(`sudo pibackup update`). If pibackup runs as a systemd service, those services
+keep running the old code until restarted — `update` prints the exact
+`systemctl restart` commands, or pass `--restart` to have it do them for you.
+
 ## Scheduling
 
 Backups run on a **system** systemd timer (`pibackup-backup.timer`, daily with a

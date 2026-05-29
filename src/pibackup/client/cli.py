@@ -781,6 +781,141 @@ def serve(
     run_server(host=host, port=port)
 
 
+@app.command()
+def update(
+    ref: str = typer.Option("main", "--ref", "--branch", help="Git ref/branch to upgrade to."),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would happen, change nothing."),
+    restart: bool = typer.Option(False, "--restart", help="Restart active pibackup systemd services afterwards."),
+    run_migrations_only: bool = typer.Option(
+        False, "--run-migrations-only", hidden=True,
+        help="(internal) Skip the upgrade; just run database migrations. "
+        "The freshly installed binary re-invokes itself with this flag.",
+    ),
+):
+    """Upgrade pibackup to the latest version and migrate local state."""
+    import subprocess
+
+    from pibackup.client.update import detect_install
+    from pibackup.common.config import load_config
+    from pibackup.common.db import init_db
+
+    # Re-exec entry point: the NEW binary runs this branch so the NEW migration
+    # logic touches the database (the original process was still the OLD code).
+    if run_migrations_only:
+        cfg = load_config()
+        init_db(cfg.db_path)
+        console.print(f"[green]Migrations applied[/] to {cfg.db_path}.")
+        return
+
+    info = detect_install(ref=ref)
+    if info.method == "unknown":
+        console.print(
+            "[yellow]Couldn't detect a pipx or venv install.[/] pibackup looks like "
+            "it's running from a source checkout or system Python — upgrade it the "
+            "way you installed it (e.g. [bold]git pull[/] or your package manager)."
+        )
+        raise typer.Exit(1)
+
+    old_version = __version__
+    extras = f" (extras: {', '.join(info.extras)})" if info.extras else ""
+    console.print(f"[cyan]pibackup {old_version}[/] — upgrading via [bold]{info.method}[/]{extras} …")
+
+    if dry_run:
+        console.print("[dim]--dry-run, would run:[/]")
+        console.print(f"  [bold]{' '.join(info.command)}[/]")
+        console.print(f"  [bold]{info.new_binary} update --run-migrations-only[/]")
+        if restart:
+            console.print("  [bold]restart active pibackup systemd services[/]")
+        return
+
+    # 1. Upgrade the package (pipx reuses its recorded spec; venv re-uses ours).
+    try:
+        subprocess.run(info.command, check=True)
+    except FileNotFoundError as exc:
+        console.print(f"[red]Upgrade tool not found:[/] {exc}. Is pipx/pip on PATH?")
+        raise typer.Exit(1)
+    except subprocess.CalledProcessError as exc:
+        console.print(
+            f"[red]Upgrade failed[/] (exit {exc.returncode}). "
+            "On a permission error, re-run as the user that owns the install "
+            "(e.g. with [bold]sudo[/] for a root/system install)."
+        )
+        raise typer.Exit(1)
+
+    # 2. Migrate via the NEW binary so the freshly installed migration code runs.
+    try:
+        subprocess.run([str(info.new_binary), "update", "--run-migrations-only"], check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        console.print(
+            f"[yellow]Upgrade succeeded but migrations didn't run automatically[/] ({exc}). "
+            f"Run them by hand: [bold]{info.new_binary} update --run-migrations-only[/]"
+        )
+
+    # 3. New version (queried from the freshly installed binary).
+    new_version = "unknown"
+    try:
+        out = subprocess.run(
+            [str(info.new_binary), "--version"], check=True, capture_output=True, text=True
+        )
+        new_version = out.stdout.strip().split()[-1]
+    except (FileNotFoundError, subprocess.CalledProcessError, IndexError):
+        pass
+    console.print(f"[green]Updated[/] pibackup {old_version} → {new_version}.")
+
+    # 4. The running services are still on the old code until restarted.
+    _handle_service_restart(restart)
+
+
+# pibackup systemd units that, if active, are running stale code after an upgrade.
+_SERVICE_UNITS = ("pibackup-server", "pibackup-agent", "pibackup-backup.timer")
+
+
+def _active_services() -> list[str]:
+    """Return the pibackup systemd units that are currently active (system + user)."""
+    import shutil
+    import subprocess
+
+    if shutil.which("systemctl") is None:
+        return []
+    active: list[str] = []
+    for unit in _SERVICE_UNITS:
+        for scope in ([], ["--user"]):
+            res = subprocess.run(
+                ["systemctl", *scope, "is-active", "--quiet", unit],
+                capture_output=True,
+            )
+            if res.returncode == 0:
+                active.append(unit if not scope else f"--user {unit}")
+                break
+    return active
+
+
+def _handle_service_restart(restart: bool) -> None:
+    """Restart active pibackup services, or print the commands to do so."""
+    import subprocess
+
+    active = _active_services()
+    if not active:
+        return
+    if not restart:
+        console.print(
+            "[yellow]Active pibackup services are still running the old code.[/] "
+            "Restart them to pick up the upgrade:"
+        )
+        for unit in active:
+            console.print(f"  [bold]sudo systemctl restart {unit}[/]")
+        console.print("[dim]Or re-run with [bold]pibackup update --restart[/].[/]")
+        return
+    for unit in active:
+        scope = ["--user"] if unit.startswith("--user ") else []
+        name = unit.replace("--user ", "")
+        try:
+            subprocess.run(["systemctl", *scope, "restart", name], check=True)
+            console.print(f"[green]Restarted[/] {unit}.")
+        except subprocess.CalledProcessError:
+            console.print(f"[red]Couldn't restart[/] {unit} — try [bold]sudo systemctl restart {name}[/].")
+
+
 # ----- root callback (version) -----
 def _version_callback(value: bool) -> None:
     if value:
