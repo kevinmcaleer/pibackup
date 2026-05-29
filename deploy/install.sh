@@ -1,16 +1,24 @@
 #!/bin/sh
-# pibackup installer.
+# pibackup installer — run as root so scheduled backups can read every file
+# (e.g. root-only paths under /etc), not just the ones the invoking user owns.
 #
-#   curl -fsSL https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh | sudo sh
 #
 # Enroll this Pi with a server in one go (env vars, easier to copy-paste):
 #   curl -fsSL https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy/install.sh \
-#     | SERVER=https://hub.local TOKEN=abc123 NAME=kitchen-pi TIMER=1 sh
+#     | sudo SERVER=https://hub.local TOKEN=abc123 NAME=kitchen-pi TIMER=1 sh
 #
-# Or the long form with flags (after `| sh -s --`):
+# Or the long form with flags (after `| sudo sh -s --`):
 #   --server URL --name NAME --token TOKEN   enroll this Pi straight away
 #   --timer                                   install + enable the daily backup timer
 set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "pibackup installs as root so backups can read every file." >&2
+  echo "Re-run piped to sudo, e.g.:" >&2
+  echo "  curl -fsSL <url> | sudo sh -s -- --server <url> --name <pi> --token <tok> --timer" >&2
+  exit 1
+fi
 
 REPO="https://github.com/kevinmcaleer/pibackup"
 RAW="https://raw.githubusercontent.com/kevinmcaleer/pibackup/main/deploy"
@@ -62,10 +70,10 @@ install_with_venv() {
 
 # Raspberry Pi OS / Debian block system-wide pip (PEP 668), so install via
 # pipx — apt-installing it if needed — and fall back to a private venv.
+# We're already root here, so no sudo is required for apt.
 if command -v pipx >/dev/null 2>&1; then
   install_with_pipx
-elif command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 \
-     && sudo apt-get install -y pipx >/dev/null 2>&1; then
+elif command -v apt-get >/dev/null 2>&1 && apt-get install -y pipx >/dev/null 2>&1; then
   install_with_pipx
 else
   install_with_venv
@@ -84,13 +92,11 @@ if [ -n "$TOKEN" ] && [ -n "$SERVER" ]; then
 fi
 
 if [ "$TIMER" = "1" ] || [ "$TIMER" = "true" ]; then
-  echo "Installing the daily backup timer…"
-  UNIT_DIR="$HOME/.config/systemd/user"
-  mkdir -p "$UNIT_DIR"
-  curl -fsSL "$RAW/pibackup-backup.service" -o "$UNIT_DIR/pibackup-backup.service"
-  curl -fsSL "$RAW/pibackup-backup.timer"   -o "$UNIT_DIR/pibackup-backup.timer"
-  systemctl --user daemon-reload
-  systemctl --user enable --now pibackup-backup.timer
+  echo "Installing the daily backup timer (system service, runs as root)…"
+  curl -fsSL "$RAW/pibackup-backup.service" -o /etc/systemd/system/pibackup-backup.service
+  curl -fsSL "$RAW/pibackup-backup.timer"   -o /etc/systemd/system/pibackup-backup.timer
+  systemctl daemon-reload
+  systemctl enable --now pibackup-backup.timer
 fi
 
 echo "Done. Try: pibackup status"

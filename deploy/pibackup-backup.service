@@ -1,5 +1,6 @@
-# pibackup scheduled backup (user service, triggered by pibackup-backup.timer).
-# Install: cp to ~/.config/systemd/user/ then `systemctl --user enable --now pibackup-backup.timer`
+# pibackup scheduled backup (system service, triggered by pibackup-backup.timer).
+# Runs as root so it can read every file. Install: copy both units to
+# /etc/systemd/system/ then `systemctl enable --now pibackup-backup.timer`.
 [Unit]
 Description=pibackup backup run
 After=network-online.target
@@ -7,6 +8,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# %h is root's home (/root) for a system service, where root's pibackup lives.
 ExecStart=%h/.local/bin/pibackup run
 # Background-friendly: low CPU + idle I/O (the client also nice/ionices rsync).
 Nice=19
