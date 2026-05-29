@@ -6,20 +6,50 @@ On the host that stores backups:
 
 ```bash
 # The [server] extra pulls fastapi/uvicorn/jinja2/python-multipart (API + dashboard).
-pipx install "pibackup[server] @ git+https://github.com/kevinmcaleer/pibackup"
-cp deploy/pibackup-server.service ~/.config/systemd/user/
-loginctl enable-linger "$USER"          # start at boot without a login
-systemctl --user enable --now pibackup-server
+sudo pibackup admin install-service
+```
+
+That single command runs the server as a robust systemd **system** service: it
+creates the `pibackup` system user, provisions the shared state dir at
+`/var/lib/pibackup`, writes `/etc/systemd/system/pibackup-server.service`, and
+enables + starts it. No login session, no linger, no session bus — manage it
+with plain systemctl:
+
+```bash
+sudo systemctl status pibackup-server
+sudo systemctl restart pibackup-server
+```
+
+> Prefer to do it by hand? Copy `deploy/pibackup-server.service` to
+> `/etc/systemd/system/`, then `sudo systemctl daemon-reload && sudo systemctl
+> enable --now pibackup-server`. Run `sudo pibackup admin install-service --dry-run`
+> to see exactly what the command would do.
+
+### Migrating from an older `--user` service
+
+Earlier versions ran the server as a `--user` service that depended on
+`loginctl enable-linger` and a session bus — fragile, and unmanageable if linger
+was never enabled. To move an existing install onto the system service, pointing
+it at the old database so clients/jobs/admin are preserved:
+
+```bash
+# stop + disable the old user service first (if it was running)
+sudo -u pibackup XDG_RUNTIME_DIR=/run/user/$(id -u pibackup) \
+  systemctl --user disable --now pibackup-server 2>/dev/null || true
+sudo loginctl disable-linger pibackup 2>/dev/null || true
+
+sudo pibackup admin install-service \
+  --migrate-from /home/pibackup/.local/share/pibackup
 ```
 
 The dashboard is locked until an administrator is set. Create one on the server:
 
 ```bash
-pibackup admin set-password             # prompts for username + password
+sudo pibackup admin set-password        # prompts for username + password
 ```
 
 Set a client-facing `repo_target` (and optionally `authorized_keys`) in
-`~/.config/pibackup/config.toml` so enrolled Pis know where to rsync:
+`/etc/pibackup/config.toml` so enrolled Pis know where to rsync:
 
 ```toml
 repo_target     = "backup@server:/srv/pibackup/repo"

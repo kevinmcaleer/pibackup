@@ -1,15 +1,31 @@
-# pibackup server (user service). Hosts the repo, API, and dashboard.
-# Install: cp to ~/.config/systemd/user/ then `systemctl --user enable --now pibackup-server`
-# (run `loginctl enable-linger $USER` so it starts at boot without a login).
+# pibackup server — system service. Hosts the repo, API, and dashboard.
+#
+# Runs as the dedicated `pibackup` system user (no login, no linger, no session
+# bus). State lives in /var/lib/pibackup, shared with `pibackup` group operators
+# (see `pibackup admin enable-group`). Manage it with plain systemctl:
+#
+#   sudo systemctl enable --now pibackup-server
+#   sudo systemctl restart pibackup-server
+#
+# Easiest install: `sudo pibackup admin install-service` provisions the user,
+# the state dir, and this unit for you. To install by hand, copy this file to
+# /etc/systemd/system/pibackup-server.service (fixing ExecStart's path to the
+# pibackup binary), then daemon-reload + enable --now.
 [Unit]
 Description=pibackup server (API + dashboard)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/pibackup serve --host 0.0.0.0
+Type=simple
+User=pibackup
+Group=pibackup
+# StateDirectory creates/owns /var/lib/pibackup (mode 2750) automatically.
+StateDirectory=pibackup
+Environment=PIBACKUP_DATA_DIR=/var/lib/pibackup
+ExecStart=/usr/local/bin/pibackup serve --host 0.0.0.0
 Restart=on-failure
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
