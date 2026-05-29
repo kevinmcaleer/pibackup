@@ -10,11 +10,13 @@ from pibackup.client.cli import app  # noqa: E402
 from pibackup.client.engine import BackupEngine  # noqa: E402
 from pibackup.common.config import Config, JobSpec, config_file  # noqa: E402
 from pibackup.common.crypto import (  # noqa: E402
+    ArchiveCancelled,
     decrypt_archive,
     encrypt_archive,
     generate_keypair,
     recipient_from_secret,
 )
+from pibackup.common.transfer import CANCELLED_EXIT_CODE  # noqa: E402
 
 runner = CliRunner()
 
@@ -108,6 +110,49 @@ def test_engine_encrypted_job(tmp_path):
     out = tmp_path / "restore"
     decrypt_archive(archives[0], out, [secret])
     assert (out / str(src).lstrip("/") / "secret.txt").read_text() == "classified"
+
+
+# ---- cancellation during archiving (issue #26) ----
+def test_encrypt_archive_cancels_and_cleans_up(tmp_path):
+    # A cancel requested before the first member aborts the build, removes the
+    # partial archive, and surfaces ArchiveCancelled.
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.txt").write_text("alpha")
+
+    _, recipient = generate_keypair()
+    archive = tmp_path / "out.tar.zst.age"
+    with pytest.raises(ArchiveCancelled):
+        encrypt_archive([str(src)], archive, recipient, should_cancel=lambda: True)
+
+    assert not archive.exists()  # no partial artifact left behind
+
+
+def test_engine_encrypted_cancel_during_archive(tmp_path):
+    # A stop set before archiving begins makes an encrypted job report the same
+    # cancelled-failure outcome (exit 130) as the rsync path, with no archive.
+    from pibackup.client import cancel
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "secret.txt").write_text("classified")
+
+    cfg = _config(tmp_path)
+    _, recipient = generate_keypair()
+    cancel.request_cancel("vault")  # pre-set flag => abort at first check
+
+    res = BackupEngine(cfg).run_job(
+        JobSpec(name="vault", sources=[str(src)], encrypted=True),
+        recipient=recipient,
+        should_cancel=cancel.cancel_checker("vault"),
+    )
+    cancel.clear_cancel("vault")
+
+    assert res.ok is False
+    assert str(CANCELLED_EXIT_CODE) in res.message
+    assert "cancelled on request" in res.message
+    job_dir = cfg.repo_dir / "testpi" / "vault"
+    assert not list(job_dir.glob("*.tar.zst.age"))  # nothing pushed
 
 
 def test_engine_encrypted_without_recipient_fails(tmp_path):
