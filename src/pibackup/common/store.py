@@ -101,6 +101,40 @@ class Store:
                ORDER BY s.created_at DESC, s.id DESC"""
         )
 
+    def get_command(self, command_id: int) -> Optional[dict]:
+        rows = self._query(
+            """SELECT cmd.*, j.name AS job_name, c.name AS client_name
+               FROM commands cmd
+               JOIN jobs j ON j.id = cmd.job_id
+               JOIN clients c ON c.id = j.client_id
+               WHERE cmd.id = ?""",
+            (command_id,),
+        )
+        return rows[0] if rows else None
+
+    def list_commands(self, limit: int = 50) -> list[dict]:
+        return self._query(
+            """SELECT cmd.*, j.name AS job_name, c.name AS client_name
+               FROM commands cmd
+               JOIN jobs j ON j.id = cmd.job_id
+               JOIN clients c ON c.id = j.client_id
+               ORDER BY cmd.created_at DESC, cmd.id DESC LIMIT ?""",
+            (limit,),
+        )
+
+    def pending_commands_for_client(self, client_name: str) -> list[dict]:
+        """Queued (still 'pending') commands for a client, oldest first so the
+        client acts on them in the order they were issued."""
+        return self._query(
+            """SELECT cmd.*, j.name AS job_name, c.name AS client_name
+               FROM commands cmd
+               JOIN jobs j ON j.id = cmd.job_id
+               JOIN clients c ON c.id = j.client_id
+               WHERE c.name = ? AND cmd.status = 'pending'
+               ORDER BY cmd.created_at, cmd.id""",
+            (client_name,),
+        )
+
     def running_runs(self) -> list[dict]:
         """In-flight runs with their live progress, newest first."""
         return self._query(
@@ -346,5 +380,42 @@ class Store:
             )
             conn.commit()
             return int(cur.lastrowid)
+        finally:
+            conn.close()
+
+    # -- commands (server -> client work queue) --
+    def enqueue_command(self, job_id: int, action: str) -> int:
+        """Queue a 'start' or 'stop' command for a job; returns its id."""
+        self.ensure_schema()
+        conn = connect(self.db_path)
+        try:
+            cur = conn.execute(
+                "INSERT INTO commands (job_id, action) VALUES (?, ?)",
+                (job_id, action),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        finally:
+            conn.close()
+
+    def update_command(
+        self,
+        command_id: int,
+        status: str,
+        message: Optional[str] = None,
+        run_id: Optional[int] = None,
+    ) -> None:
+        """Advance a command's lifecycle (claimed/acted-on by the client)."""
+        conn = connect(self.db_path)
+        try:
+            conn.execute(
+                """UPDATE commands SET status=?,
+                       message=COALESCE(?, message),
+                       run_id=COALESCE(?, run_id),
+                       updated_at=datetime('now')
+                   WHERE id=?""",
+                (status, message, run_id, command_id),
+            )
+            conn.commit()
         finally:
             conn.close()

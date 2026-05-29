@@ -75,6 +75,22 @@ class ServerApi:
     def delete_job(self, job_id: int):
         return self._request("DELETE", f"/jobs/{job_id}")
 
+    # commands (start/stop a job from the server side)
+    def start_job(self, job_id: int):
+        return self._request("POST", f"/jobs/{job_id}/start")
+
+    def stop_job(self, job_id: int):
+        return self._request("POST", f"/jobs/{job_id}/stop")
+
+    def list_commands(self):
+        return self._request("GET", "/commands")
+
+    def pending_commands(self, client_name: str):
+        return self._request("GET", f"/clients/{self._seg(client_name)}/commands")
+
+    def update_command(self, command_id: int, payload: dict):
+        return self._request("PATCH", f"/commands/{command_id}", payload)
+
     # runs + snapshots
     def report_run(self, job_id: int, payload: dict):
         return self._request("POST", f"/jobs/{job_id}/runs", payload)

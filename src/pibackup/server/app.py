@@ -75,6 +75,13 @@ class EnrollIn(BaseModel):
     ssh_public_key: Optional[str] = None
 
 
+class CommandPatch(BaseModel):
+    # The client reports back as it acts on a queued command.
+    status: str  # running|done|failed
+    message: str = ""
+    run_id: Optional[int] = None
+
+
 def _append_authorized_key(path: str, public_key: str, name: str) -> None:
     """Best-effort: add an enrolled client's SSH key to authorized_keys."""
     try:
@@ -241,6 +248,47 @@ def create_app(config: Optional[Config] = None):
             raise HTTPException(404, f"unknown job: {job_id}")
         store.delete_job(job_id)
         return {"deleted": job_id}
+
+    # ---- commands (start/stop a job remotely) ----
+    def _enqueue(job_id: int, action: str) -> dict:
+        if store.get_job(job_id) is None:
+            raise HTTPException(404, f"unknown job: {job_id}")
+        command_id = store.enqueue_command(job_id, action)
+        return store.get_command(command_id)
+
+    def _enqueue_response(job_id: int, action: str, request):
+        """JSON for API/CLI callers; a redirect back to the dashboard for the
+        web buttons (which post an HTML form and expect a page, not JSON)."""
+        cmd = _enqueue(job_id, action)
+        if "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/", status_code=303)
+        return cmd
+
+    @api.post("/jobs/{job_id}/start")
+    def start_job(job_id: int, request: Request):
+        """Queue a 'start' command; the client runs the job on its next poll."""
+        return _enqueue_response(job_id, "start", request)
+
+    @api.post("/jobs/{job_id}/stop")
+    def stop_job(job_id: int, request: Request):
+        """Queue a 'stop' command; the client cancels a running job."""
+        return _enqueue_response(job_id, "stop", request)
+
+    @api.get("/commands")
+    def list_commands(limit: int = 50):
+        return store.list_commands(limit)
+
+    @api.get("/clients/{client_name}/commands")
+    def pending_commands(client_name: str):
+        """Pending commands for a client to act on (client polls this)."""
+        return store.pending_commands_for_client(client_name)
+
+    @api.patch("/commands/{command_id}")
+    def patch_command(command_id: int, body: CommandPatch):
+        if store.get_command(command_id) is None:
+            raise HTTPException(404, f"unknown command: {command_id}")
+        store.update_command(command_id, body.status, body.message or None, body.run_id)
+        return store.get_command(command_id)
 
     # ---- runs + snapshots ----
     def _finalize_run(run_id: int, job_id: int, status: str, bytes_transferred: int,

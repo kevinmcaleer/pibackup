@@ -63,6 +63,10 @@ _DASHBOARD = """<!doctype html>
   .bar { height:10px; background:#eaeef2; border-radius:6px; overflow:hidden; }
   .bar .fill { height:100%; background:var(--ok); transition:width .5s; }
   .stalled .bar .fill { background:var(--fail); }
+  .act { display:inline; margin:0; }
+  .btn { font:inherit; font-size:13px; font-weight:600; padding:4px 12px; border:1px solid var(--border); border-radius:6px; cursor:pointer; }
+  .btn.start { background:var(--ok); color:#fff; border-color:var(--ok); }
+  .btn.stop { background:var(--fail); color:#fff; border-color:var(--fail); }
 </style>
 </head>
 <body>
@@ -97,7 +101,7 @@ _DASHBOARD = """<!doctype html>
   <h2>Backup jobs</h2>
   {% if jobs %}
   <table>
-    <thead><tr><th>Pi</th><th>Job</th><th>Sources</th><th>Retention</th><th>Encrypted</th><th>Last run</th><th>Status</th><th>Snapshots</th></tr></thead>
+    <thead><tr><th>Pi</th><th>Job</th><th>Sources</th><th>Retention</th><th>Encrypted</th><th>Last run</th><th>Status</th><th>Snapshots</th><th>Actions</th></tr></thead>
     <tbody>
     {% for j in jobs %}
       <tr>
@@ -109,6 +113,13 @@ _DASHBOARD = """<!doctype html>
         <td class="muted">{{ j.last_started or '—' }}</td>
         <td><span class="badge {{ j.last_status or 'never' }}">{{ j.last_status or 'never' }}</span></td>
         <td>{{ j.snapshots }}</td>
+        <td>
+          {% if j.running %}
+          <form class="act" method="post" action="/jobs/{{ j.id }}/stop"><button class="btn stop" type="submit">Stop</button></form>
+          {% else %}
+          <form class="act" method="post" action="/jobs/{{ j.id }}/start"><button class="btn start" type="submit">Start</button></form>
+          {% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>
@@ -251,11 +262,15 @@ def render_dashboard(store: Store) -> str:
     for snap in snaps:
         snap_count[snap["job_id"]] = snap_count.get(snap["job_id"], 0) + 1
 
+    # Jobs with an in-flight run can be stopped; the rest can be started.
+    running_job_ids = {r["job_id"] for r in store.running_runs()}
+
     job_rows = []
     for job in jobs:
         lr = last_run.get(job["id"])
         job_rows.append(
             {
+                "id": job["id"],
                 "client": job["client_name"],
                 "name": job["name"],
                 "sources": json.loads(job["source_paths"]),
@@ -264,6 +279,7 @@ def render_dashboard(store: Store) -> str:
                 "last_status": lr["status"] if lr else None,
                 "last_started": lr["started_at"] if lr else None,
                 "snapshots": snap_count.get(job["id"], 0),
+                "running": job["id"] in running_job_ids,
             }
         )
 
