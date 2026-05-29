@@ -28,6 +28,7 @@ from typing import Optional
 from pibackup.common.config import Config, JobSpec, ssh_key_path
 from pibackup.common.crypto import ARCHIVE_SUFFIX
 from pibackup.common.transfer import (
+    CANCELLED_EXIT_CODE,
     Destination,
     background_prefix,
     build_rsync_command,
@@ -144,12 +145,26 @@ class BackupEngine:
                 started, _now_iso(),
             )
 
-        from pibackup.common.crypto import encrypt_archive
+        from pibackup.common.crypto import ArchiveCancelled, encrypt_archive
 
         snap_sub = f"{base_sub}/{archive_name}"
         with tempfile.TemporaryDirectory() as tmp:
             local_archive = Path(tmp) / archive_name
-            size = encrypt_archive(spec.sources, local_archive, recipient)
+            try:
+                size = encrypt_archive(
+                    spec.sources, local_archive, recipient, should_cancel=should_cancel
+                )
+            except ArchiveCancelled:
+                # Report the same cancelled-failure outcome as the rsync path
+                # (exit 130, a "cancelled on request" message) so a stop during
+                # archiving reads identically to one during the push.
+                # encrypt_archive has already removed the partial archive; the
+                # tempdir takes care of the rest.
+                return JobResult(
+                    spec.name, False, None, None, 0, 0,
+                    f"encrypt exit {CANCELLED_EXIT_CODE}: cancelled on request",
+                    started, _now_iso(),
+                )
             cmd = build_rsync_command(
                 str(local_archive), self.dest.rsync_target(snap_sub),
                 compress=False, bwlimit_kbps=spec.bwlimit_kbps or None,
