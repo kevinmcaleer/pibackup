@@ -558,6 +558,68 @@ def admin_show():
     _detail("Administrator", {"username": admin["username"], "updated_at": admin["updated_at"]})
 
 
+@admin_app.command("enable-group")
+def admin_enable_group(
+    operator: Optional[str] = typer.Argument(
+        None,
+        help="User to grant group-based admin access (defaults to $SUDO_USER, "
+        "i.e. whoever invoked this under sudo).",
+    ),
+    service_user: str = typer.Option(
+        "pibackup", "--service-user", help="The system user the daemon runs as (owns state)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-n", help="Show what would happen, change nothing."
+    ),
+):
+    """Grant an operator Docker-style admin access via the `pibackup` group.
+
+    Sets up a shared state dir (/var/lib/pibackup, group-owned + setgid) and a
+    system config so members of the `pibackup` group run admin commands as
+    themselves — no `sudo -u pibackup -H /full/path`. Must run as root.
+    """
+    import os
+    import subprocess
+
+    from pibackup.server.provision import build_plan
+
+    if operator is None:
+        operator = os.environ.get("SUDO_USER") or None
+
+    plan = build_plan(operator, service_user)
+
+    if dry_run:
+        console.print("[dim]--dry-run, would run:[/]")
+        console.print(plan.as_shell())
+        console.print()
+        for note in plan.notes:
+            console.print(f"[cyan]•[/] {note}")
+        return
+
+    if os.geteuid() != 0:
+        console.print(
+            "[red]Must run as root[/] (it edits groups and /etc). "
+            "Re-run with [bold]sudo[/]."
+        )
+        raise typer.Exit(1)
+
+    for cmd in plan.commands:
+        try:
+            subprocess.run(cmd, check=True)
+        except FileNotFoundError:
+            console.print(f"[red]Command not found:[/] {cmd[0]}. Is it on PATH?")
+            raise typer.Exit(1)
+        except subprocess.CalledProcessError as exc:
+            console.print(f"[red]Step failed[/] (exit {exc.returncode}): {' '.join(cmd)}")
+            raise typer.Exit(1)
+
+    plan.config_path.write_text(plan.config_body)
+    console.print(f"[green]Wrote[/] {plan.config_path}")
+    console.print()
+    for note in plan.notes:
+        console.print(f"[cyan]•[/] {note}")
+
+
 # ===== top-level shortcuts =====
 @app.command()
 def run(

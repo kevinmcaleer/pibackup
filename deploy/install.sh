@@ -88,7 +88,24 @@ else
 fi
 
 BIN="$(command -v pibackup || echo "$HOME/.local/bin/pibackup")"
+
+# Put pibackup on the system PATH. install.sh usually runs under sudo, so the
+# binary lands in root's ~/.local/bin — which isn't on sudo's secure_path nor on
+# a normal user's PATH, forcing awkward full-path invocations (issue #33). A
+# symlink in /usr/local/bin (on secure_path by default) makes bare `pibackup`
+# and `sudo pibackup` both work, for every user.
+LAUNCHER="/usr/local/bin/pibackup"
+if [ "$BIN" != "$LAUNCHER" ] && [ -w "$(dirname "$LAUNCHER")" ]; then
+  ln -sf "$BIN" "$LAUNCHER"
+  echo "Linked $LAUNCHER -> $BIN"
+fi
+
 echo "Installed: $BIN"
+if command -v pibackup >/dev/null 2>&1; then
+  echo "Run it directly: pibackup status"
+else
+  echo "Add to PATH or use: $BIN status"
+fi
 
 if [ -n "$TOKEN" ] && [ -n "$SERVER" ]; then
   echo "Enrolling with $SERVER…"
