@@ -26,6 +26,38 @@ repo_target     = "backup@server:/srv/pibackup/repo"
 authorized_keys = "/home/backup/.ssh/authorized_keys"
 ```
 
+## Server admin access (the `pibackup` group)
+
+By default the server runs as a dedicated `pibackup` service user, which would
+force every admin command through `sudo -u pibackup -H /home/pibackup/.local/bin/pibackup …`.
+Instead, grant yourself **Docker-style** access: run admin commands as yourself
+once you're in the `pibackup` group.
+
+```bash
+sudo pibackup admin enable-group           # adds $SUDO_USER to the group
+sudo pibackup admin enable-group alice      # or name the operator explicitly
+sudo pibackup admin enable-group --dry-run  # show what it'll do, change nothing
+```
+
+This creates the `pibackup` group, provisions a shared state dir at
+`/var/lib/pibackup` (group-owned, setgid so new files inherit the group),
+writes `/etc/pibackup/config.toml` pointing every operator at that shared DB,
+and adds the operator to the group.
+
+Then — exactly like Docker's `docker` group — **log out and back in once** (or
+run `newgrp pibackup`) so the new group membership takes effect. After that you
+run admin commands directly, as yourself:
+
+```bash
+pibackup client ls          # no sudo -u, no full path
+pibackup enroll kitchen-pi
+pibackup job ls --client dev01
+```
+
+> Security note: membership of the `pibackup` group grants full admin over the
+> backups (read/write of the shared DB and repo) — the same trade-off Docker
+> makes with its group. Only add trusted operators.
+
 ## Add a Pi (one-liner)
 
 On the server: `pibackup enroll kitchen-pi` prints a bootstrap. On the new Pi

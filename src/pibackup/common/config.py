@@ -46,6 +46,19 @@ def config_file() -> Path:
     return config_dir() / "config.toml"
 
 
+def system_config_file() -> Path:
+    """A system-wide config layered *under* the per-user config.toml.
+
+    This is how the Docker-style shared-state model (issue #33) points every
+    operator at one DB: ``pibackup admin enable-group`` writes this file with a
+    ``data_dir`` under ``/var/lib/pibackup`` so the service user and any member
+    of the ``pibackup`` group resolve the *same* state, regardless of whose
+    ``$HOME`` they run as. Overridable via ``PIBACKUP_SYSTEM_CONFIG`` for tests.
+    Absent (the default on a fresh user install), behaviour is unchanged.
+    """
+    return _env_path("PIBACKUP_SYSTEM_CONFIG", Path("/etc/pibackup/config.toml"))
+
+
 def default_server_url() -> str:
     """The server URL when config.toml doesn't set one. Overridable via
     ``PIBACKUP_SERVER_URL`` (mirrors ``PIBACKUP_DATA_DIR``) so tests and
@@ -83,11 +96,21 @@ class JobSpec:
 
 
 def _load_toml() -> dict:
-    cfg_file = config_file()
-    if not cfg_file.exists():
-        return {}
-    with cfg_file.open("rb") as fh:
-        return tomllib.load(fh)
+    """Merge the system config (if any) under the per-user config.
+
+    Per-user ``config.toml`` keys win over the system file, so an operator can
+    still override anything locally; the system file (written by
+    ``admin enable-group``) supplies the shared ``data_dir`` both the service
+    user and grouped operators resolve to. A fresh user install has no system
+    file, so this collapses to the original single-file behaviour.
+    """
+    merged: dict = {}
+    for cfg_path in (system_config_file(), config_file()):
+        if not cfg_path.exists():
+            continue
+        with cfg_path.open("rb") as fh:
+            merged.update(tomllib.load(fh))
+    return merged
 
 
 def load_config() -> Config:
