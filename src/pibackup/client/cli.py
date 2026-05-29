@@ -87,13 +87,46 @@ def _local_store():
     return Store(load_config().db_path)
 
 
-def _jobs_data() -> tuple[list[dict], bool]:
-    """Return (jobs-as-dicts, server_backed)."""
+def _resolve_client(server, client: Optional[str]) -> str:
+    """Resolve the target client for a job command.
+
+    With no ``--client`` the local client (``cfg.client_name``) is used, exactly
+    as before. When a client is named, it must already be enrolled on the server
+    — otherwise we exit with a friendly hint rather than letting a raw 404 from
+    ``/clients/<name>/jobs`` leak out. This is the shared spine for cross-client
+    job management (issue #32).
+    """
+    from pibackup.client.api import ApiError
+    from pibackup.common.config import load_config
+
+    if not client:
+        return load_config().client_name
+    try:
+        clients = server.list_clients() or []
+    except ApiError as exc:
+        console.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    if not any(c.get("name") == client for c in clients):
+        console.print(
+            f"[red]No such enrolled client:[/] {client}\n"
+            "[dim]Run 'pibackup client ls' to see enrolled Pis.[/]"
+        )
+        raise typer.Exit(1)
+    return client
+
+
+def _jobs_data(client: Optional[str] = None) -> tuple[list[dict], bool]:
+    """Return (jobs-as-dicts, server_backed).
+
+    When ``client`` is given (and a server is reachable) the listing is for that
+    enrolled client instead of the local one.
+    """
     from pibackup.common.config import load_config, load_jobs
 
     server = _server()
     if server:
-        return server.get_jobs(load_config().client_name) or [], True
+        target = _resolve_client(server, client)
+        return server.get_jobs(target) or [], True
     return (
         [
             {
@@ -142,11 +175,12 @@ def _detail(title: str, data: dict) -> None:
 # ===== job =====
 @job_app.command("ls")
 def job_ls(
+    client: Optional[str] = typer.Option(None, "--client", "-c", help="Target enrolled client (default: this host)."),
     fmt: OutputFormat = typer.Option(OutputFormat.table, "--format", "-f", help="Output format."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Only show names."),
 ):
     """List backup jobs."""
-    jobs, server_backed = _jobs_data()
+    jobs, server_backed = _jobs_data(client)
     rows = [
         (
             j["name"],
@@ -169,11 +203,16 @@ def job_ls(
 def job_create(
     name: str = typer.Argument(..., help="Job name."),
     sources: list[str] = typer.Option(..., "--source", "-s", help="Source path (repeatable)."),
+    client: Optional[str] = typer.Option(None, "--client", "-c", help="Target enrolled client (default: this host)."),
     retention_days: int = typer.Option(30, "--retention", help="Days to keep (0 = forever)."),
     bwlimit_kbps: int = typer.Option(0, "--bwlimit", help="Bandwidth cap KB/s (0 = unlimited)."),
     encrypt: bool = typer.Option(False, "--encrypt", help="Encrypt this job (Phase 4)."),
 ):
-    """Create a backup job on the server."""
+    """Create a backup job on the server.
+
+    With ``--client`` the job is created for another enrolled Pi (managed from
+    the server); without it, for the local host.
+    """
     from pibackup.client.api import ApiError
     from pibackup.common.config import load_config
 
@@ -182,10 +221,15 @@ def job_create(
         console.print("[red]No server reachable.[/] Start one with [bold]pibackup serve[/] or set server_url.")
         raise typer.Exit(1)
     cfg = load_config()
+    local = cfg.client_name
     try:
-        server.register_client(cfg.client_name, socket.gethostname())
+        # Targeting another host requires it to be enrolled already; only the
+        # local client is auto-registered (don't silently create a remote Pi).
+        target = _resolve_client(server, client)
+        if target == local:
+            server.register_client(local, socket.gethostname())
         job = server.create_job(
-            cfg.client_name,
+            target,
             {
                 "name": name,
                 "sources": list(sources),
@@ -197,13 +241,16 @@ def job_create(
     except ApiError as exc:
         console.print(f"[red]{exc}[/]")
         raise typer.Exit(1)
-    console.print(f"[green]Created job[/] [bold]{name}[/] (id {job['id']}) for {cfg.client_name}.")
+    console.print(f"[green]Created job[/] [bold]{name}[/] (id {job['id']}) for {target}.")
 
 
 @job_app.command("inspect")
-def job_inspect(job: str = typer.Argument(..., help="Job id or name.")):
+def job_inspect(
+    job: str = typer.Argument(..., help="Job id or name."),
+    client: Optional[str] = typer.Option(None, "--client", "-c", help="Target enrolled client (default: this host)."),
+):
     """Show a job's full configuration."""
-    jobs, _ = _jobs_data()
+    jobs, _ = _jobs_data(client)
     match = next((j for j in jobs if j["name"] == job or str(j.get("id")) == job), None)
     if not match:
         console.print(f"[red]No such job:[/] {job}")
@@ -212,17 +259,20 @@ def job_inspect(job: str = typer.Argument(..., help="Job id or name.")):
 
 
 @job_app.command("rm")
-def job_rm(job: str = typer.Argument(..., help="Job id or name.")):
+def job_rm(
+    job: str = typer.Argument(..., help="Job id or name."),
+    client: Optional[str] = typer.Option(None, "--client", "-c", help="Target enrolled client (default: this host)."),
+):
     """Remove a backup job (server)."""
     from pibackup.client.api import ApiError
-    from pibackup.common.config import load_config
 
     server = _server()
     if not server:
         console.print("[yellow]No server reachable.[/] In standalone mode, remove the [[job]] entry from config.toml.")
         raise typer.Exit(1)
     try:
-        jobs = server.get_jobs(load_config().client_name) or []
+        target = _resolve_client(server, client)
+        jobs = server.get_jobs(target) or []
         match = next((j for j in jobs if j["name"] == job or str(j["id"]) == job), None)
         if not match:
             console.print(f"[red]No such job:[/] {job}")
@@ -235,10 +285,12 @@ def job_rm(job: str = typer.Argument(..., help="Job id or name.")):
 
 
 @job_app.command("start")
-def job_start(job: str = typer.Argument(..., help="Job id or name.")):
+def job_start(
+    job: str = typer.Argument(..., help="Job id or name."),
+    client: Optional[str] = typer.Option(None, "--client", "-c", help="Target enrolled client (default: this host)."),
+):
     """Queue a backup run for a job (the client picks it up and runs it)."""
     from pibackup.client.api import ApiError
-    from pibackup.common.config import load_config
 
     server = _server()
     if not server:
@@ -248,7 +300,8 @@ def job_start(job: str = typer.Argument(..., help="Job id or name.")):
         )
         raise typer.Exit(1)
     try:
-        jobs = server.get_jobs(load_config().client_name) or []
+        target = _resolve_client(server, client)
+        jobs = server.get_jobs(target) or []
         match = next((j for j in jobs if j["name"] == job or str(j["id"]) == job), None)
         if not match:
             console.print(f"[red]No such job:[/] {job}")
@@ -261,17 +314,20 @@ def job_start(job: str = typer.Argument(..., help="Job id or name.")):
 
 
 @job_app.command("stop")
-def job_stop(job: str = typer.Argument(..., help="Job id or name.")):
+def job_stop(
+    job: str = typer.Argument(..., help="Job id or name."),
+    client: Optional[str] = typer.Option(None, "--client", "-c", help="Target enrolled client (default: this host)."),
+):
     """Queue a stop for a running backup (cancels it on the client)."""
     from pibackup.client.api import ApiError
-    from pibackup.common.config import load_config
 
     server = _server()
     if not server:
         console.print("[red]No server reachable.[/] Stopping jobs is a server action.")
         raise typer.Exit(1)
     try:
-        jobs = server.get_jobs(load_config().client_name) or []
+        target = _resolve_client(server, client)
+        jobs = server.get_jobs(target) or []
         match = next((j for j in jobs if j["name"] == job or str(j["id"]) == job), None)
         if not match:
             console.print(f"[red]No such job:[/] {job}")
