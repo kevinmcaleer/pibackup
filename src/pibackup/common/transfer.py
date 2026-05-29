@@ -51,6 +51,7 @@ def build_rsync_command(
     dry_run: bool = False,
     rsh: Optional[str] = None,
     progress: bool = False,
+    default_excludes: bool = True,
     extra: Optional[Sequence[str]] = None,
 ) -> list[str]:
     """Assemble the rsync argv for a backup push.
@@ -65,6 +66,11 @@ def build_rsync_command(
     - ``-e``            the SSH transport (``rsh``), so the enrolled key is used
     - ``--info=progress2`` whole-transfer %/rate/ETA, with a known total
       (``--no-inc-recursive``) so the percentage is monotonic
+
+    ``default_excludes`` adds the always-skip pseudo-filesystems (``/proc``,
+    ``/sys``, ``/tmp``, …) — right for a backup *push*, but must be off for a
+    restore, which has to reproduce the snapshot verbatim (a stored path that
+    happens to match an exclude would otherwise silently vanish).
     """
     cmd: list[str] = ["rsync", "-a", "--partial", "--stats"]
     if compress:
@@ -81,8 +87,9 @@ def build_rsync_command(
         cmd.append(f"--bwlimit={bwlimit_kbps}")
     if link_dest:
         cmd.append(f"--link-dest={link_dest}")
-    for exc in _DEFAULT_EXCLUDES:
-        cmd.append(f"--exclude={exc}")
+    if default_excludes:
+        for exc in _DEFAULT_EXCLUDES:
+            cmd.append(f"--exclude={exc}")
     if extra:
         cmd.extend(extra)
     if isinstance(sources, (str, Path)):
