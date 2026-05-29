@@ -25,7 +25,6 @@ _DASHBOARD = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="{{ refresh }}">
 <title>pibackup</title>
 <style>
   :root { --ok:#1a7f37; --fail:#cf222e; --muted:#57606a; --bg:#f6f8fa; --card:#fff; --border:#d0d7de; }
@@ -90,6 +89,7 @@ _DASHBOARD = """<!doctype html>
   <form method="post" action="/logout"><button class="logout" type="submit">Sign out</button></form>
 </header>
 <main>
+  <section id="running">
   {% if running %}
   <h2>Running now</h2>
   {% for r in running %}
@@ -105,6 +105,7 @@ _DASHBOARD = """<!doctype html>
     </div>
   {% endfor %}
   {% endif %}
+  </section>
 
   <div class="cards">
     <div class="card"><div class="n">{{ totals.clients }}</div><div class="l">Pis</div></div>
@@ -199,6 +200,61 @@ _DASHBOARD = """<!doctype html>
   <div class="empty">No runs yet.</div>
   {% endif %}
 </main>
+<script>
+// Update only the "Running now" section so an open New-job form is never wiped.
+(function () {
+  function card(r) {
+    var div = document.createElement("div");
+    div.className = "running-card" + (r.stalled ? " stalled" : "");
+    var head = document.createElement("div");
+    head.className = "run-head";
+    var who = document.createElement("span");
+    who.className = "who";
+    who.textContent = (r.client || "") + " / " + (r.job || "");
+    var meta = document.createElement("span");
+    meta.className = "meta";
+    if (r.stalled) {
+      var badge = document.createElement("span");
+      badge.className = "badge failure";
+      badge.textContent = "stalled";
+      meta.appendChild(badge);
+      meta.appendChild(document.createTextNode(" "));
+    }
+    var txt = r.percent + "%";
+    if (r.rate) { txt += " \\u00b7 " + r.rate; }
+    if (r.eta && !r.stalled) { txt += " \\u00b7 ETA " + r.eta; }
+    meta.appendChild(document.createTextNode(txt));
+    head.appendChild(who);
+    head.appendChild(meta);
+    var bar = document.createElement("div");
+    bar.className = "bar";
+    var fill = document.createElement("div");
+    fill.className = "fill";
+    fill.style.width = r.percent + "%";
+    bar.appendChild(fill);
+    div.appendChild(head);
+    div.appendChild(bar);
+    return div;
+  }
+  function render(rows) {
+    var sec = document.getElementById("running");
+    if (!sec) { return; }
+    sec.textContent = "";
+    if (!rows || rows.length === 0) { return; }
+    var h2 = document.createElement("h2");
+    h2.textContent = "Running now";
+    sec.appendChild(h2);
+    rows.forEach(function (r) { sec.appendChild(card(r)); });
+  }
+  function poll() {
+    fetch("/running", { headers: { "Accept": "application/json" } })
+      .then(function (resp) { return resp.ok ? resp.json() : null; })
+      .then(function (data) { if (data) { render(data.running); } })
+      .catch(function () {});
+  }
+  setInterval(poll, 3000);
+})();
+</script>
 </body>
 </html>
 """
@@ -297,6 +353,12 @@ def _human_bytes(n: int) -> str:
     return f"{size:.1f} TB"
 
 
+def running_rows(store: Store) -> list[dict]:
+    """Public helper: the current running runs shaped for the dashboard /
+    the /running poll endpoint (client name + progress)."""
+    return _running_rows(store.running_runs())
+
+
 def render_dashboard(store: Store, newjob_error: str | None = None) -> str:
     clients = store.list_clients()
     jobs = store.list_jobs()
@@ -341,11 +403,9 @@ def render_dashboard(store: Store, newjob_error: str | None = None) -> str:
     }
 
     running = _running_rows(store.running_runs())  # carries client name + progress
-    # Poll quickly while something is actively running, otherwise stay calm.
-    refresh = 3 if any(not r["stalled"] for r in running) else 30
 
     return _env.get_template("dashboard.html").render(
         version=__version__, jobs=job_rows, runs=runs[:20], totals=totals,
-        running=running, refresh=refresh,
+        running=running,
         clients=[c["name"] for c in clients], newjob_error=newjob_error,
     )
