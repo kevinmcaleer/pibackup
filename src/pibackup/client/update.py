@@ -101,7 +101,13 @@ def detect_install(
     current process). For a pipx/venv install that's the venv's python, whose
     layout tells us which mechanism to use.
     """
-    exe = Path(executable or sys.executable).resolve()
+    # NB: resolve the *directory* but NOT the final python symlink. In a real
+    # pipx/venv, ``bin/python`` is a symlink to the base interpreter (e.g.
+    # ``/usr/bin/python3.13``); a naive ``.resolve()`` would follow it straight
+    # out of the venv, ``pyvenv.cfg`` would be missing, and detection would
+    # wrongly report "unknown" (breaking ``pibackup update`` on every pipx box).
+    raw = Path(executable or sys.executable)
+    exe = raw.parent.resolve() / raw.name
     root = _venv_root(exe)
 
     # pipx lays venvs out under ``<pipx-home>/venvs/<package>/`` — detect that
