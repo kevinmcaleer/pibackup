@@ -93,6 +93,7 @@ class ApiReporter:
                 retention_days=j["retention_days"],
                 bwlimit_kbps=j["bwlimit_kbps"] or 0,
                 encrypted=j["encrypted"],
+                archive=j.get("archive", False),
             )
             for j in self._jobs
         ]

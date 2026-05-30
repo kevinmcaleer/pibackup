@@ -14,6 +14,13 @@ Two modes:
       <repo>/<client>/<job>/<UTC timestamp>.tar.zst.age
       <repo>/<client>/<job>/latest             # symlink to newest archive
 
+- **Archive** — a single gzip'd tar (``.tar.gz``) per run (issue #41), the
+  smallest-on-disk option for a one-off backup but with no cross-snapshot
+  hardlink dedup. Layout::
+
+      <repo>/<client>/<job>/<UTC timestamp>.tar.gz
+      <repo>/<client>/<job>/latest             # symlink to newest archive
+
 The engine only performs the transfer; recording the run is the reporter's job.
 """
 
@@ -89,6 +96,8 @@ class BackupEngine:
         self.dest.mkdirs(base_sub)
         if spec.encrypted:
             return self._run_encrypted(spec, base_sub, recipient, dry_run, on_progress, should_cancel)
+        if spec.archive:
+            return self._run_archive(spec, base_sub, dry_run, on_progress, should_cancel)
         return self._run_plaintext(spec, base_sub, dry_run, on_progress, should_cancel)
 
     # ----- plaintext: rsync --link-dest snapshots -----
@@ -183,4 +192,58 @@ class BackupEngine:
             spec.name, True, archive_name, self.dest.abspath(snap_sub),
             result.bytes_transferred or size, 1,
             f"encrypted {size} bytes -> {archive_name}", started, finished,
+        )
+
+    # ----- archive: plain tar.gz (issue #41) -----
+    def _run_archive(
+        self, spec: JobSpec, base_sub: str, dry_run: bool,
+        on_progress=None, should_cancel=None,
+    ) -> JobResult:
+        from pibackup.common.archive import (
+            ARCHIVE_GZ_SUFFIX,
+            ArchiveCancelled,
+            make_tar_gz,
+        )
+
+        started = _now_iso()
+        archive_name = f"{_timestamp()}{ARCHIVE_GZ_SUFFIX}"
+
+        if dry_run:
+            return JobResult(
+                spec.name, True, None, None, 0, 0,
+                f"would archive {len(spec.sources)} source(s) -> {archive_name}",
+                started, _now_iso(),
+            )
+
+        snap_sub = f"{base_sub}/{archive_name}"
+        with tempfile.TemporaryDirectory() as tmp:
+            local_archive = Path(tmp) / archive_name
+            try:
+                size = make_tar_gz(spec.sources, local_archive, should_cancel=should_cancel)
+            except ArchiveCancelled:
+                # Report the same cancelled-failure outcome as the rsync path
+                # (exit 130). make_tar_gz already removed the partial archive.
+                return JobResult(
+                    spec.name, False, None, None, 0, 0,
+                    f"archive exit {CANCELLED_EXIT_CODE}: cancelled on request",
+                    started, _now_iso(),
+                )
+            cmd = build_rsync_command(
+                str(local_archive), self.dest.rsync_target(snap_sub),
+                compress=False, bwlimit_kbps=spec.bwlimit_kbps or None,
+                rsh=self.dest.rsh, progress=True,
+            )
+            result = self._rsync(cmd, on_progress, should_cancel)
+        finished = _now_iso()
+
+        if not result.ok:
+            return JobResult(
+                spec.name, False, None, None, result.bytes_transferred, 0,
+                result.message, started, finished,
+            )
+        self.dest.update_latest(base_sub, archive_name)
+        return JobResult(
+            spec.name, True, archive_name, self.dest.abspath(snap_sub),
+            result.bytes_transferred or size, 1,
+            f"archived {size} bytes -> {archive_name}", started, finished,
         )
