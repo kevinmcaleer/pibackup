@@ -190,7 +190,7 @@ _DASHBOARD = """<!doctype html>
         <td>{{ r.job_name }}</td>
         <td class="muted">{{ r.started_at }}</td>
         <td><span class="badge {{ r.status }}">{{ r.status }}</span></td>
-        <td>{{ r.bytes_transferred }}</td>
+        <td>{{ r.bytes_h }}</td>
         <td class="muted">{{ r.message }}</td>
       </tr>
     {% endfor %}
@@ -348,9 +348,9 @@ def _human_bytes(n: int) -> str:
     size = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size < 1024 or unit == "TB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+            return f"{size:,.0f} {unit}" if unit == "B" else f"{size:,.1f} {unit}"
         size /= 1024
-    return f"{size:.1f} TB"
+    return f"{size:,.1f} TB"
 
 
 def running_rows(store: Store) -> list[dict]:
@@ -403,9 +403,15 @@ def render_dashboard(store: Store, newjob_error: str | None = None) -> str:
     }
 
     running = _running_rows(store.running_runs())  # carries client name + progress
+    # Per-run byte counts get humanised (B/KB/MB/GB/TB) with comma grouping.
+    recent_runs = []
+    for run in runs[:20]:
+        row = dict(run)
+        row["bytes_h"] = _human_bytes(run["bytes_transferred"] or 0)
+        recent_runs.append(row)
 
     return _env.get_template("dashboard.html").render(
-        version=__version__, jobs=job_rows, runs=runs[:20], totals=totals,
+        version=__version__, jobs=job_rows, runs=recent_runs, totals=totals,
         running=running,
         clients=[c["name"] for c in clients], newjob_error=newjob_error,
     )
