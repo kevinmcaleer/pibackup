@@ -20,7 +20,7 @@ from pibackup.common.db import init_db
 from pibackup.common.auth import verify_session
 from pibackup.common.store import Store
 from pibackup.server import retention
-from pibackup.server.dashboard import render_dashboard, render_login
+from pibackup.server.dashboard import render_dashboard, render_login, running_rows
 
 # Name of the signed cookie that carries the dashboard login session.
 SESSION_COOKIE = "pibackup_session"
@@ -153,6 +153,15 @@ def create_app(config: Optional[Config] = None):
         if not _logged_in(request):
             return RedirectResponse("/login", status_code=303)
         return render_dashboard(store)
+
+    @api.get("/running")
+    def running(request: Request):
+        """Live progress for the 'Running now' cards, polled by the dashboard
+        JS so it can refresh independently of the rest of the page (so an open
+        New-job form is never wiped). Session-authed like the dashboard."""
+        if not _logged_in(request):
+            return RedirectResponse("/login", status_code=303)
+        return {"running": running_rows(store)}
 
     @api.get("/login", response_class=HTMLResponse)
     def login_form(request: Request):
