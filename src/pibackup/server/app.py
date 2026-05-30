@@ -39,6 +39,7 @@ class JobIn(BaseModel):
     retention_days: int = 30
     bwlimit_kbps: int = 0
     encrypted: bool = False
+    archive: bool = False
     schedule: Optional[str] = None
 
 
@@ -108,6 +109,7 @@ def _job_out(row: dict) -> dict:
         "retention_days": row["retention_days"],
         "bwlimit_kbps": row["bwlimit_kbps"] or 0,
         "encrypted": bool(row["encrypted"]),
+        "archive": bool(row["archive"]),
         "created_at": row.get("created_at"),
     }
 
@@ -231,6 +233,7 @@ def create_app(config: Optional[Config] = None):
             retention_days=body.retention_days,
             bwlimit_kbps=body.bwlimit_kbps,
             encrypted=body.encrypted,
+            archive=body.archive,
         )
         job_id = store.ensure_job(cid, spec)
         return _job_out(store.get_job(job_id))
@@ -268,6 +271,7 @@ def create_app(config: Optional[Config] = None):
         retention_days: int = Form(30),
         bwlimit_kbps: int = Form(0),
         encrypted: str = Form(""),
+        archive: str = Form(""),
     ):
         """Create a job for any enrolled client from the dashboard form."""
         if not _logged_in(request):
@@ -289,6 +293,7 @@ def create_app(config: Optional[Config] = None):
             retention_days=retention_days,
             bwlimit_kbps=bwlimit_kbps,
             encrypted=bool(encrypted),
+            archive=bool(archive),
         )
         store.ensure_job(cid, spec)
         return RedirectResponse("/", status_code=303)

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     schedule       TEXT,                          -- systemd timer / cron expression
     retention_days INTEGER NOT NULL DEFAULT 30,
     encrypted      INTEGER NOT NULL DEFAULT 0,    -- 0/1
+    archive        INTEGER NOT NULL DEFAULT 0,    -- 0/1: pack each run into one .tar.gz (issue #41)
     bwlimit_kbps   INTEGER,                        -- NULL = unlimited
     created_at     TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (client_id, name)
@@ -122,13 +123,21 @@ _RUN_COLUMNS = {
     "updated_at": "TEXT",
 }
 
+_JOB_COLUMNS = {
+    "archive": "INTEGER NOT NULL DEFAULT 0",
+}
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Add columns missing from an older `runs` table (idempotent)."""
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+    """Add columns missing from older `runs`/`jobs` tables (idempotent)."""
+    run_cols = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
     for col, decl in _RUN_COLUMNS.items():
-        if col not in existing:
+        if col not in run_cols:
             conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
+    job_cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    for col, decl in _JOB_COLUMNS.items():
+        if col not in job_cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {decl}")
 
 
 def init_db(db_path: Path | str) -> None:

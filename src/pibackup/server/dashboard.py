@@ -146,12 +146,16 @@ _DASHBOARD = """<!doctype html>
         <input id="nj-encrypted" name="encrypted" type="checkbox" value="1">
         <label for="nj-encrypted">Encrypted</label>
       </div>
+      <div class="field checkbox">
+        <input id="nj-archive" name="archive" type="checkbox" value="1">
+        <label for="nj-archive">Archive (single .tar.gz)</label>
+      </div>
       <div class="submit"><button class="btn create" type="submit">Create job</button></div>
     </form>
   </details>
   {% if jobs %}
   <table>
-    <thead><tr><th>Pi</th><th>Job</th><th>Sources</th><th>Retention</th><th>Encrypted</th><th>Last run</th><th>Status</th><th>Snapshots</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Pi</th><th>Job</th><th>Sources</th><th>Retention</th><th>Mode</th><th>Last run</th><th>Status</th><th>Snapshots</th><th>Actions</th></tr></thead>
     <tbody>
     {% for j in jobs %}
       <tr>
@@ -159,7 +163,7 @@ _DASHBOARD = """<!doctype html>
         <td>{{ j.name }}</td>
         <td class="muted">{{ j.sources | join(', ') }}</td>
         <td>{{ j.retention_days }}d</td>
-        <td>{{ 'yes' if j.encrypted else 'no' }}</td>
+        <td>{{ 'encrypted' if j.encrypted else ('archive' if j.archive else 'plain') }}</td>
         <td class="muted">{{ j.last_started or '—' }}</td>
         <td><span class="badge {{ j.last_status or 'never' }}">{{ j.last_status or 'never' }}</span></td>
         <td>{{ j.snapshots }}</td>
@@ -388,6 +392,7 @@ def render_dashboard(store: Store, newjob_error: str | None = None) -> str:
                 "sources": json.loads(job["source_paths"]),
                 "retention_days": job["retention_days"],
                 "encrypted": bool(job["encrypted"]),
+                "archive": bool(job["archive"]),
                 "last_status": lr["status"] if lr else None,
                 "last_started": lr["started_at"] if lr else None,
                 "snapshots": snap_count.get(job["id"], 0),

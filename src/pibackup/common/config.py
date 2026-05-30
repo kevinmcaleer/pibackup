@@ -15,6 +15,7 @@ The same ``config.toml`` also holds the client's backup jobs (Phase 1 is
     retention_days = 30
     bwlimit_kbps = 0          # 0 = unlimited
     encrypted = false         # Phase 4
+    archive = false           # issue #41: pack the run into a single .tar.gz
 """
 
 from __future__ import annotations
@@ -93,6 +94,7 @@ class JobSpec:
     retention_days: int = 30
     bwlimit_kbps: int = 0  # 0 = unlimited
     encrypted: bool = False
+    archive: bool = False  # pack each run into a single .tar.gz (issue #41)
 
 
 def _load_toml() -> dict:
@@ -142,6 +144,7 @@ def load_jobs() -> list[JobSpec]:
                 retention_days=int(entry.get("retention_days", 30)),
                 bwlimit_kbps=int(entry.get("bwlimit_kbps", 0)),
                 encrypted=bool(entry.get("encrypted", False)),
+                archive=bool(entry.get("archive", False)),
             )
         )
     return jobs

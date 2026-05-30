@@ -255,12 +255,13 @@ class Store:
         try:
             conn.execute(
                 """INSERT INTO jobs (client_id, name, source_paths, retention_days,
-                                     encrypted, bwlimit_kbps)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                                     encrypted, archive, bwlimit_kbps)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(client_id, name) DO UPDATE SET
                      source_paths=excluded.source_paths,
                      retention_days=excluded.retention_days,
                      encrypted=excluded.encrypted,
+                     archive=excluded.archive,
                      bwlimit_kbps=excluded.bwlimit_kbps""",
                 (
                     client_id,
@@ -268,6 +269,7 @@ class Store:
                     json.dumps(spec.sources),
                     spec.retention_days,
                     int(spec.encrypted),
+                    int(spec.archive),
                     spec.bwlimit_kbps or None,
                 ),
             )
